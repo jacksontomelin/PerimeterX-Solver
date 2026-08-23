@@ -452,58 +452,165 @@ def _detect_px(site_name, url):
 
 
 def _try_solve(app_id, collector_uri, host):
-    """Tenta resolver PX challenge"""
+    """Tenta resolver PX challenge com sessão real do site"""
     import uuid as uuid_mod
     import traceback
-
-    if not collector_uri:
-        collector_uri = f"https://collector-{app_id.lower()}.px-cloud.net/api/v2/collector"
-
-    sid = str(uuid_mod.uuid4())
-    vid = str(uuid_mod.uuid4())
-    cts = str(uuid_mod.uuid4())
+    import requests as req
 
     debug = {
         "app_id": app_id,
-        "collector_uri": collector_uri,
         "host": host,
-        "sid": sid,
-        "vid": vid,
+        "steps": []
     }
 
+    # STEP 1: Buscar sessão real do site (cookies _pxhd, _pxvid, etc)
     try:
-        solver = PXSolver(
-            app_id=app_id,
-            ft=221,
-            collector_uri=collector_uri,
-            host=host,
-            sid=sid,
-            vid=vid,
-            cts=cts
-        )
-        token = solver.solve()
+        headers = {
+            "User-Agent": PXSolver.USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        site_resp = req.get(host, headers=headers, timeout=15, allow_redirects=True)
+        cookies = site_resp.cookies.get_dict()
 
-        if token:
-            debug["status"] = "SUCCESS"
-            debug["token"] = token[:80] + "..." if len(str(token)) > 80 else token
-        else:
-            debug["status"] = "FAIL"
-            debug["message"] = "Solver returned None (expected with generated session IDs)"
-            if solver.resp_1:
-                debug["resp_1"] = {
-                    "type": str(type(solver.resp_1).__name__),
-                    "keys": list(solver.resp_1.keys()) if isinstance(solver.resp_1, dict) else None,
-                    "preview": str(solver.resp_1)[:300]
-                }
-            else:
-                debug["resp_1"] = None
-                debug["resp_1_note"] = "First request failed - collector may have rejected"
+        # Extrair PX cookies
+        px_cookies = {k: v for k, v in cookies.items() if k.startswith("_px")}
+
+        # Também extrair de Set-Cookie headers
+        raw_set_cookie = site_resp.headers.get("Set-Cookie", "")
+        import re
+        for m in re.finditer(r'(_px\w+)=([^;]+)', raw_set_cookie):
+            px_cookies[m.group(1)] = m.group(2)
+
+        debug["steps"].append({
+            "step": "fetch_session",
+            "status": "OK",
+            "http_status": site_resp.status_code,
+            "cookies_found": list(cookies.keys()),
+            "px_cookies": list(px_cookies.keys()),
+        })
+
+        # Usar _pxvid como vid se disponível
+        real_vid = px_cookies.get("_pxvid", str(uuid_mod.uuid4()))
+        real_sid = str(uuid_mod.uuid4())  # sid é sempre novo
+        real_cts = str(uuid_mod.uuid4())
 
     except Exception as e:
-        debug["status"] = "ERROR"
-        debug["error"] = str(e)
-        debug["traceback"] = traceback.format_exc().split("\n")[-3:]
+        debug["steps"].append({"step": "fetch_session", "status": "FAIL", "error": str(e)})
+        real_vid = str(uuid_mod.uuid4())
+        real_sid = str(uuid_mod.uuid4())
+        real_cts = str(uuid_mod.uuid4())
+        px_cookies = {}
 
+    # STEP 2: Tentar múltiplas versões do collector
+    collector_urls = []
+    aid_lower = app_id.lower()
+
+    if collector_uri:
+        collector_urls.append(collector_uri)
+
+    # Adicionar variações
+    for ver in ["v2", "v1", "v3"]:
+        url = f"https://collector-{aid_lower}.px-cloud.net/api/{ver}/collector"
+        if url not in collector_urls:
+            collector_urls.append(url)
+
+    # Também tentar sem o prefixo
+    collector_urls.append(f"https://collector.px-cloud.net/api/v2/collector")
+
+    debug["collector_urls_to_try"] = collector_urls
+    debug["session"] = {"sid": real_sid, "vid": real_vid}
+
+    # STEP 3: Tentar resolver com cada collector URL
+    for i, coll_url in enumerate(collector_urls):
+        attempt = {
+            "attempt": i + 1,
+            "collector_uri": coll_url,
+        }
+
+        try:
+            solver = PXSolver(
+                app_id=app_id,
+                ft=221,
+                collector_uri=coll_url,
+                host=host,
+                sid=real_sid,
+                vid=real_vid,
+                cts=real_cts
+            )
+
+            # Tentar request_1 individualmente para capturar detalhes
+            r1_success = solver.request_1()
+            attempt["request_1"] = {
+                "success": r1_success,
+                "resp_1": None
+            }
+
+            if r1_success and solver.resp_1:
+                attempt["request_1"]["resp_1"] = {
+                    "keys": list(solver.resp_1.keys()) if isinstance(solver.resp_1, dict) else str(type(solver.resp_1)),
+                    "preview": str(solver.resp_1)[:500]
+                }
+
+                # Checar cookie na resp_1
+                token = solver.parse_for_cookie(solver.resp_1)
+                if token:
+                    attempt["status"] = "SUCCESS_R1"
+                    attempt["token"] = token
+                    debug["steps"].append(attempt)
+                    debug["status"] = "SUCCESS"
+                    debug["token"] = token
+                    debug["solved_with"] = coll_url
+                    return debug
+
+                # Tentar solve_request
+                r2_success = solver.solve_request()
+                attempt["request_2"] = {"success": r2_success}
+
+                if r2_success and solver.resp_2:
+                    attempt["request_2"]["resp_2"] = {
+                        "keys": list(solver.resp_2.keys()) if isinstance(solver.resp_2, dict) else str(type(solver.resp_2)),
+                        "preview": str(solver.resp_2)[:500]
+                    }
+                    token = solver.parse_for_cookie(solver.resp_2)
+                    if token:
+                        attempt["status"] = "SUCCESS_R2"
+                        attempt["token"] = token
+                        debug["steps"].append(attempt)
+                        debug["status"] = "SUCCESS"
+                        debug["token"] = token
+                        debug["solved_with"] = coll_url
+                        return debug
+
+                attempt["status"] = "NO_TOKEN"
+            else:
+                # request_1 falhou — capturar por quê
+                attempt["status"] = "R1_FAIL"
+                # Tentar HEAD no collector pra ver se URL existe
+                try:
+                    probe = req.head(coll_url, timeout=5, headers={"User-Agent": PXSolver.USER_AGENT})
+                    attempt["collector_probe"] = {
+                        "status": probe.status_code,
+                        "reason": probe.reason
+                    }
+                except Exception as pe:
+                    attempt["collector_probe"] = {"error": str(pe)}
+
+        except Exception as e:
+            attempt["status"] = "ERROR"
+            attempt["error"] = str(e)
+            attempt["traceback"] = traceback.format_exc().split("\n")[-4:-1]
+
+        debug["steps"].append(attempt)
+
+    debug["status"] = "ALL_ATTEMPTS_FAILED"
+    debug["message"] = (
+        "Nenhum collector retornou token. Possíveis causas: "
+        "1) Fingerprints hardcoded para Airtable (precisa adaptar para o site alvo), "
+        "2) Versão PX diferente (solver é v6.7.9), "
+        "3) Collector requer headers/cookies específicos do site, "
+        "4) IP do servidor bloqueado pelo PX"
+    )
     return debug
 
 
