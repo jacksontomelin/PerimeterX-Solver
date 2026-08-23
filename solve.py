@@ -169,14 +169,9 @@ class PXSolver:
     
     def handle_human_challenge(self, host: str, proxy: Optional[str] = None) -> Optional[str]:
         """
-        Resolver human challenge usando Playwright
-        
-        Args:
-            host: URL host onde o challenge está
-            proxy: Proxy a usar (mesmo do session se disponível)
-            
-        Returns:
-            _px3 token se resolvido, None caso contrário
+        Resolver human challenge usando Playwright.
+        Abordagem: browser real visita o site → PX JavaScript executa → 
+        _px3 cookie é setado automaticamente (ou challenge visual aparece).
         """
         if not HUMAN_CHALLENGE_AVAILABLE:
             logger.error("Human challenge solver not available - Playwright not installed")
@@ -185,11 +180,10 @@ class PXSolver:
         try:
             logger.info(f"Attempting to solve human challenge on {host}")
             
-            # Usar o mesmo proxy do session se não especificado
             if not proxy and hasattr(self, 'session') and self.session.proxies:
-                proxy = self.session.proxies.get('https', '').replace('http://', '')
+                proxy_val = self.session.proxies.get('https', '')
+                proxy = proxy_val.replace('http://', '') if proxy_val else None
             
-            # Resolver challenge em navegador real
             success, token = solve_human_challenge_sync(
                 url=host,
                 proxy=proxy,
@@ -739,6 +733,7 @@ def _try_solve(app_id, collector_uri, host):
 
     debug["collector_urls_to_try"] = collector_urls
     debug["session"] = {"sid": real_sid, "vid": real_vid}
+    browser_attempted = False  # Só tentar browser uma vez
 
     # STEP 3: Tentar resolver com cada collector URL
     for i, coll_url in enumerate(collector_urls):
@@ -785,21 +780,103 @@ def _try_solve(app_id, collector_uri, host):
 
                 # Checar se é drc|1402 (human challenge)
                 is_human, drc_val = PXSolver.detect_human_challenge(solver.resp_1)
-                if is_human and HUMAN_CHALLENGE_AVAILABLE:
+                if is_human and HUMAN_CHALLENGE_AVAILABLE and not browser_attempted:
+                    browser_attempted = True
                     attempt["human_challenge"] = {"detected": True, "drc": drc_val}
                     logger.info(f"drc|1402 detected on {host}, launching browser solver...")
-                    hc_token = solver.handle_human_challenge(host)
-                    if hc_token:
-                        attempt["status"] = "SUCCESS_HUMAN_CHALLENGE"
-                        attempt["token"] = hc_token
-                        debug["steps"].append(attempt)
-                        debug["status"] = "SUCCESS"
-                        debug["token"] = hc_token
-                        debug["solved_with"] = f"{coll_url} + human_challenge"
-                        return debug
-                    else:
+                    
+                    # Capturar debug info do browser
+                    try:
+                        from human_challenge import HumanChallengeSolver
+                        hc = HumanChallengeSolver(headless=True, timeout_ms=30000)
+                        
+                        import asyncio
+                        try:
+                            loop = asyncio.get_event_loop()
+                        except RuntimeError:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                        
+                        async def _solve_with_debug():
+                            try:
+                                await hc.create_context()
+                                
+                                # Interceptar PX responses
+                                px_responses = []
+                                all_cookies_after = []
+                                
+                                async def log_response(resp):
+                                    try:
+                                        u = resp.url
+                                        if any(k in u for k in ["px-cloud", "px-cdn", "captcha", "_px"]):
+                                            px_responses.append({"url": u[:120], "status": resp.status})
+                                        sc = resp.headers.get("set-cookie", "")
+                                        if "_px" in sc:
+                                            import re
+                                            for m in re.finditer(r'(_px\w+)=([^;]{1,80})', sc):
+                                                all_cookies_after.append({m.group(1): m.group(2)[:60]})
+                                    except:
+                                        pass
+                                
+                                hc.page.on("response", log_response)
+                                
+                                await hc.page.goto(host, wait_until="domcontentloaded", timeout=25000)
+                                await asyncio.sleep(5)
+                                
+                                # Extrair cookies
+                                cookies = await hc.context.cookies()
+                                px_cookies = {c["name"]: c["value"][:60] for c in cookies if c["name"].startswith("_px")}
+                                all_cookie_names = [c["name"] for c in cookies]
+                                
+                                # Extrair page info
+                                title = await hc.page.title()
+                                url_now = hc.page.url
+                                body = await hc.page.evaluate("() => document.body ? document.body.innerText.substring(0,300) : ''")
+                                
+                                # Checar se _px3 está nos cookies
+                                px3 = px_cookies.get("_px3")
+                                if px3:
+                                    return True, px3, {
+                                        "method": "cookie_from_browser",
+                                        "px_cookies": px_cookies,
+                                        "page_title": title,
+                                    }
+                                
+                                # Tentar achar #px-captcha
+                                has_captcha = await hc.page.evaluate("() => !!document.querySelector('#px-captcha')")
+                                
+                                return False, None, {
+                                    "page_title": title,
+                                    "page_url": url_now,
+                                    "body_preview": body[:200],
+                                    "all_cookie_names": all_cookie_names[:20],
+                                    "px_cookies_found": px_cookies,
+                                    "px_responses_intercepted": px_responses[:10],
+                                    "px_set_cookies": all_cookies_after[:10],
+                                    "has_px_captcha_element": has_captcha,
+                                }
+                            except Exception as ex:
+                                return False, None, {"browser_error": str(ex)}
+                            finally:
+                                await hc.close()
+                        
+                        success, token, debug_info = loop.run_until_complete(_solve_with_debug())
+                        attempt["human_challenge"]["browser_debug"] = debug_info
+                        
+                        if success and token:
+                            attempt["status"] = "SUCCESS_HUMAN_CHALLENGE"
+                            attempt["token"] = token
+                            debug["steps"].append(attempt)
+                            debug["status"] = "SUCCESS"
+                            debug["token"] = token
+                            debug["solved_with"] = f"{coll_url} + browser"
+                            return debug
+                        else:
+                            attempt["human_challenge"]["solved"] = False
+                    
+                    except Exception as hc_err:
+                        attempt["human_challenge"]["error"] = str(hc_err)
                         attempt["human_challenge"]["solved"] = False
-                        attempt["human_challenge"]["error"] = "Browser solver returned no token"
 
                 # Tentar solve_request
                 r2_success = solver.solve_request()
