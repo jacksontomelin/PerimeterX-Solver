@@ -1,8 +1,30 @@
 import random
 import json
+import re
 import time
 import pytz
 from datetime import datetime
+
+
+def _px_extract(data_str, key):
+    """Extrai valor de uma chave PX tipo 'key|value' de forma segura"""
+    try:
+        after = data_str.split(f"{key}|")[1]
+        val = re.split(r"['\"\]\,]", after)[0]
+        return val
+    except (IndexError, KeyError):
+        return None
+
+
+def _px_int(data_str, key):
+    """Extrai valor inteiro de uma chave PX"""
+    val = _px_extract(data_str, key)
+    if val is None:
+        return 0
+    try:
+        return int(val)
+    except ValueError:
+        return 0
 import urllib.parse
 from mods import fn, generate_pc
 
@@ -42,10 +64,10 @@ def fingerprint_2(payload_1: dict, response_1: dict, site_keys: dict) -> str:
             "PX196": False,
             "PX207": False,
             "PX251": False,
-            "PX982": int(response_data.split("sts|")[1].split("',")[0]),
-            "PX983": response_data.split("cls|")[1].split("',")[0],
-            f"{fn(response_data.split("cls|")[1].split("',")[0], int(response_data.split("sts|")[1].split("',")[0]) % 10 + 2)}": f"{fn(response_data.split("cls|")[1].split("',")[0], int(response_data.split("sts|")[1].split("',")[0]) % 10 + 1)}",
-            "PX985": int(response_data.split("drc|")[1].split("',")[0]),
+            "PX982": _px_int(response_data, "sts"),
+            "PX983": _px_extract(response_data, "cls"),
+            f"{fn(_px_extract(response_data, "cls"), _px_int(response_data, "sts") % 10 + 2)}": f"{fn(_px_extract(response_data, "cls"), _px_int(response_data, "sts") % 10 + 1)}",
+            "PX985": _px_int(response_data, "drc"),
             "PX1033": "49e5084e",
             "PX1019": "1530fd3",
             "PX1020": "57b9b686",
@@ -55,7 +77,7 @@ def fingerprint_2(payload_1: dict, response_1: dict, site_keys: dict) -> str:
             "PX1139": False,
             "PX1025": False,
             "PX359": f"{generate_pc("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36", payload_1['PX1038'], False)}",
-            "PX943": response_data.split("wcs|")[1].split("',")[0],
+            "PX943": _px_extract(response_data, "wcs") or "",
             "PX357": f"{generate_pc("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36", site_keys['vid'], False)}",
             "PX358": f"{generate_pc("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36", site_keys['sid'], False)}",
             "PX229": 24,
