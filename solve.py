@@ -360,6 +360,39 @@ def test_px():
 
     result = _detect_px(site, SITES[site])
 
+    # Fallback: IDs conhecidos de scans anteriores
+    KNOWN_PX_IDS = {
+        "nordstrom": ["PXRQG2AQ", "PX49ZQ8Z", "PXASN0T4", "PXAMQADJ8"],
+        "zillow": ["PXHYx10rg3"],
+        "fiverr": ["PXK3bezZfO"],
+        "airtable": ["PX0OZADU9K"],
+    }
+
+    # Se não detectou PX no HTML mas temos IDs conhecidos, tentar mesmo assim
+    if not result.get("app_id") and site in KNOWN_PX_IDS and SOLVER_READY:
+        result["fallback_mode"] = True
+        result["message"] = "PX não encontrado no HTML, usando IDs conhecidos de scans anteriores"
+        
+        for known_id in KNOWN_PX_IDS[site]:
+            collector = f"https://collector-{known_id.lower()}.px-cloud.net/api/v2/collector"
+            solve_debug = _try_solve(
+                app_id=known_id,
+                collector_uri=collector,
+                host=SITES[site]
+            )
+            result["solve_attempt"] = solve_debug
+            result["app_id_used"] = known_id
+            
+            # Se alguma tentativa teve request_1 success, parar
+            if solve_debug.get("status") == "SUCCESS":
+                break
+            # Se request_1 funcionou (mesmo sem token), usar esse ID
+            steps = solve_debug.get("steps", [])
+            if any(s.get("request_1", {}).get("success") for s in steps if isinstance(s, dict) and "request_1" in s):
+                break
+        
+        return jsonify(result)
+
     # Se encontrou PX e solver está pronto, tentar resolver
     if result.get("px_detected") and result.get("app_id") and SOLVER_READY:
         solve_debug = _try_solve(
