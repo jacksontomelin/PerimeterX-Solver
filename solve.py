@@ -55,6 +55,15 @@ except Exception as e:
     logger.warning(f"Human challenge solver not available: {e}")
     HUMAN_CHALLENGE_AVAILABLE = False
 
+# Tentar carregar proxy manager
+try:
+    from proxy_manager import ProxyManager, get_proxy_manager
+    PROXY_MANAGER_AVAILABLE = True
+    logger.info("Proxy manager loaded successfully")
+except Exception as e:
+    logger.warning(f"Proxy manager not available: {e}")
+    PROXY_MANAGER_AVAILABLE = False
+
 
 class PXSolver:
     USER_AGENT = (
@@ -62,7 +71,7 @@ class PXSolver:
         "(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
     )
 
-    def __init__(self, app_id, ft, collector_uri, host, sid, vid, cts, proxy=None):
+    def __init__(self, app_id, ft, collector_uri, host, sid, vid, cts, proxy=None, auto_detect_proxy=True):
         self.app_id = app_id
         self.ft = ft
         self.collector_url = collector_uri
@@ -70,17 +79,30 @@ class PXSolver:
         self.sid = sid
         self.vid = vid
         self.cts = cts
+        
+        # Auto-detect proxy se não fornecido explicitamente
+        effective_proxy = proxy
+        if not effective_proxy and auto_detect_proxy and PROXY_MANAGER_AVAILABLE:
+            proxy_mgr = get_proxy_manager()
+            effective_proxy = proxy_mgr.get_proxy_url()
+            if effective_proxy:
+                logger.info(f"Using auto-detected proxy: {effective_proxy}")
 
         self.session = tls_client.Session(
             client_identifier="chrome_127",
             random_tls_extension_order=True
         )
 
-        if proxy:
+        if effective_proxy:
+            # Normalizar proxy URL
+            if not effective_proxy.startswith(('http://', 'https://', 'socks://')):
+                effective_proxy = f'http://{effective_proxy}'
+            
             self.session.proxies = {
-                'https': f'http://{proxy}',
-                'http': f'http://{proxy}'
+                'https': effective_proxy,
+                'http': effective_proxy
             }
+            logger.info(f"Proxy configured: {effective_proxy}")
 
         self.session.headers = {
             'accept': '*/*',
