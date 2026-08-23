@@ -1,65 +1,56 @@
 """
-PerimeterX Solver v6.7.9
-Improved version with proper error handling, logging, and configuration management
+PerimeterX Solver v2.0.0 - Web API
+Flask server with lazy-loaded solver to prevent startup crashes
 """
 
-import tls_client
-import uuid
-import time
+import os
 import json
 import logging
-import os
-from typing import Optional
-from dotenv import load_dotenv
-from fingerprint import fingerprint_1, fingerprint_2
-from mods import encrypt_payload, generate_pc
+import time
+import uuid
 import urllib.parse
+from datetime import datetime
+from typing import Optional
+from flask import Flask, request, jsonify
 
-# Load environment variables
-load_dotenv()
+# Load env
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
-# Configure logging
+# Logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
+app = Flask(__name__)
+
+# Track import status
+SOLVER_READY = False
+IMPORT_ERROR = None
+
+try:
+    import tls_client
+    from fingerprint import fingerprint_1, fingerprint_2
+    from mods import encrypt_payload, generate_pc
+    SOLVER_READY = True
+    logger.info("All solver modules loaded successfully")
+except Exception as e:
+    IMPORT_ERROR = str(e)
+    logger.error(f"Solver modules failed to load: {e}")
+
 
 class PXSolver:
-    """
-    PerimeterX v6.7.9 Solver
-    
-    Attributes:
-        app_id: Application ID from PerimeterX script
-        ft: Fingerprint type
-        collector_uri: API endpoint URL
-        host: Target website URL
-        sid: Session ID
-        vid: Visitor ID
-        cts: Client timestamp
-        proxy: Optional proxy URL
-    """
-    
-    # Default user agent matching Chrome 127
     USER_AGENT = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
     )
-    
-    def __init__(
-        self,
-        app_id: str,
-        ft: int,
-        collector_uri: str,
-        host: str,
-        sid: str,
-        vid: str,
-        cts: str,
-        proxy: Optional[str] = None
-    ):
-        """Initialize PX Solver with required parameters"""
-        
+
+    def __init__(self, app_id, ft, collector_uri, host, sid, vid, cts, proxy=None):
         self.app_id = app_id
         self.ft = ft
         self.collector_url = collector_uri
@@ -67,24 +58,18 @@ class PXSolver:
         self.sid = sid
         self.vid = vid
         self.cts = cts
-        
-        logger.debug(f"Initializing PXSolver for app_id: {app_id}")
-        
-        # Initialize TLS session with Chrome 127 fingerprint
+
         self.session = tls_client.Session(
             client_identifier="chrome_127",
             random_tls_extension_order=True
         )
-        
-        # Configure proxy if provided
+
         if proxy:
-            logger.info(f"Using proxy: {proxy}")
             self.session.proxies = {
                 'https': f'http://{proxy}',
                 'http': f'http://{proxy}'
             }
-        
-        # Set request headers
+
         self.session.headers = {
             'accept': '*/*',
             'accept-language': 'en-US,en;q=0.9',
@@ -99,56 +84,29 @@ class PXSolver:
             'sec-fetch-site': 'cross-site',
             'user-agent': self.USER_AGENT,
         }
-        
-        # Initialize timestamps and UUIDs
+
         self.st = int(time.time()) * 1000
-        self.site_uuids = {
-            "sid": sid,
-            "vid": vid,
-            "cts": cts
-        }
+        self.site_uuids = {"sid": sid, "vid": vid, "cts": cts}
         self.uuid = str(uuid.uuid4())
         self.pc_key = f"{self.uuid}:v6.7.9:{ft}"
         self.rsc = 1
-        
-        # Store responses
         self.resp_1 = None
         self.resp_2 = None
         self.raw_payload = None
         self.fp_2 = None
 
     @staticmethod
-    def parse_for_cookie(response: dict) -> Optional[str]:
-        """
-        Extract _px3 cookie from response
-        
-        Args:
-            response: Response dictionary from collector API
-            
-        Returns:
-            Cookie token string or None if not found
-        """
+    def parse_for_cookie(response):
         try:
             response_str = str(response.get('do', ''))
             token = response_str.split("bake|_px3|330|")[1].split("|")[0]
-            logger.debug(f"Successfully parsed token from response")
             return token
-        except (IndexError, KeyError, AttributeError) as e:
-            logger.warning(f"Failed to parse cookie: {e}")
+        except (IndexError, KeyError, AttributeError):
             return None
 
-    def request_1(self) -> bool:
-        """
-        First fingerprint request
-        
-        Returns:
-            True if successful, False otherwise
-        """
+    def request_1(self):
         try:
-            logger.info("Sending first fingerprint request...")
-            
             self.raw_payload = fingerprint_1(self.host, self.uuid, self.st)
-            
             payload = {
                 "payload": encrypt_payload(self.raw_payload),
                 "appId": self.app_id,
@@ -161,65 +119,33 @@ class PXSolver:
                 "sid": self.sid,
                 "rsc": self.rsc
             }
-            
-            # Add optional site UUIDs
-            for site_key in self.site_uuids:
-                if self.site_uuids[site_key] is not None:
-                    payload[site_key] = self.site_uuids[site_key]
-            
+            for k in self.site_uuids:
+                if self.site_uuids[k] is not None:
+                    payload[k] = self.site_uuids[k]
             self.rsc += 1
-            
-            # Send request
             response = self.session.post(
                 self.collector_url,
                 data=urllib.parse.urlencode(payload, safe="="),
                 timeout=10
             )
-            
-            logger.debug(f"Response status: {response.status_code}")
-            
             if response.status_code != 200:
-                logger.error(
-                    f"Request 1 failed with status {response.status_code}: {response.text[:200]}"
-                )
+                logger.error(f"Request 1 failed: {response.status_code}")
                 return False
-            
             self.resp_1 = response.json()
-            logger.info("First request completed successfully")
             return True
-            
         except Exception as e:
-            logger.error(f"Request 1 failed: {type(e).__name__}: {e}")
+            logger.error(f"Request 1 error: {e}")
             return False
 
-    def solve_request(self) -> bool:
-        """
-        Second fingerprint request to solve the challenge
-        
-        Returns:
-            True if successful, False otherwise
-        """
+    def solve_request(self):
         try:
-            logger.info("Sending solve request...")
-            
             if self.resp_1 is None:
-                logger.error("resp_1 is None, cannot proceed")
                 return False
-            
             self.fp_2 = fingerprint_2(
-                json.loads(self.raw_payload),
-                self.resp_1,
-                self.site_uuids
+                json.loads(self.raw_payload), self.resp_1, self.site_uuids
             )
-            
-            # Extract cs value from response
-            try:
-                response_str = str(self.resp_1['do'])
-                cs_value = response_str.split("cs|")[1].split("',")[0]
-            except (IndexError, KeyError) as e:
-                logger.error(f"Failed to extract cs value: {e}")
-                return False
-            
+            response_str = str(self.resp_1['do'])
+            cs_value = response_str.split("cs|")[1].split("',")[0]
             payload_data = {
                 "payload": encrypt_payload(self.fp_2),
                 "appId": self.app_id,
@@ -235,72 +161,33 @@ class PXSolver:
                 "cts": self.site_uuids['cts'],
                 "rsc": self.rsc
             }
-            
-            # Send request
             response = self.session.post(
                 self.collector_url,
                 data=urllib.parse.urlencode(payload_data, safe="="),
                 timeout=10
             )
-            
-            logger.debug(f"Response status: {response.status_code}")
-            
             if response.status_code != 200:
-                logger.error(
-                    f"Solve request failed with status {response.status_code}: {response.text[:200]}"
-                )
+                logger.error(f"Solve failed: {response.status_code}")
                 return False
-            
             self.resp_2 = response.json()
-            logger.info("Solve request completed successfully")
             return True
-            
         except Exception as e:
-            logger.error(f"Solve request failed: {type(e).__name__}: {e}")
+            logger.error(f"Solve error: {e}")
             return False
 
-    def solve(self) -> Optional[str]:
-        """
-        Solve PerimeterX challenge
-        
-        Returns:
-            _px3 cookie token if successful, None otherwise
-        """
-        logger.info(f"Starting to solve PX challenge for {self.host}")
-        
-        # Try first request
+    def solve(self):
         if not self.request_1():
-            logger.error("Failed to send initial request")
             return None
-        
-        # Check if token found in first response
         token = self.parse_for_cookie(self.resp_1)
         if token:
-            logger.info("✅ Token found in first request")
             return token
-        
-        # Try solve request
         if not self.solve_request():
-            logger.error("Failed to send solve request")
             return None
-        
-        # Check if token found in second response
         token = self.parse_for_cookie(self.resp_2)
-        if token:
-            logger.info("✅ Token found in solve request")
-            return token
-        
-        logger.warning("❌ No token found in either response")
-        return None
+        return token
 
 
-## ====== FLASK WEB SERVER ======
-
-from flask import Flask, request, jsonify
-from datetime import datetime
-
-app = Flask(__name__)
-
+# ====== FLASK ROUTES ======
 
 @app.route('/', methods=['GET'])
 def home():
@@ -308,6 +195,8 @@ def home():
         "service": "PerimeterX Solver",
         "version": "2.0.0",
         "status": "running",
+        "solver_ready": SOLVER_READY,
+        "import_error": IMPORT_ERROR,
         "endpoints": {
             "GET /": "This page",
             "GET /health": "Health check",
@@ -319,11 +208,23 @@ def home():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({"status": "healthy", "version": "2.0.0", "timestamp": datetime.now().isoformat()})
+    return jsonify({
+        "status": "healthy",
+        "solver_ready": SOLVER_READY,
+        "import_error": IMPORT_ERROR,
+        "version": "2.0.0",
+        "timestamp": datetime.now().isoformat()
+    })
 
 
 @app.route('/api/solve', methods=['POST'])
 def solve_api():
+    if not SOLVER_READY:
+        return jsonify({
+            "status": "error",
+            "message": f"Solver not ready: {IMPORT_ERROR}"
+        }), 503
+
     try:
         data = request.get_json()
         if not data:
@@ -344,16 +245,14 @@ def solve_api():
             cts=data['cts'],
             proxy=data.get('proxy')
         )
-
         token = solver.solve()
 
         if token:
-            return jsonify({"status": "success", "token": token, "timestamp": datetime.now().isoformat()})
+            return jsonify({"status": "success", "token": token})
         else:
-            return jsonify({"status": "error", "message": "Failed to solve challenge"}), 500
+            return jsonify({"status": "error", "message": "Failed to solve"}), 500
 
     except Exception as e:
-        logger.error(f"API error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -368,5 +267,8 @@ def not_found(e):
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 3000))
-    logger.info(f"Starting PerimeterX Solver API on port {port}")
+    logger.info(f"Starting PX Solver API on 0.0.0.0:{port}")
+    logger.info(f"Solver ready: {SOLVER_READY}")
+    if IMPORT_ERROR:
+        logger.error(f"Import error: {IMPORT_ERROR}")
     app.run(host='0.0.0.0', port=port, debug=False)
