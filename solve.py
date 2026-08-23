@@ -502,7 +502,8 @@ def test_px():
                 app_id=known_id,
                 collector_uri=collector,
                 host=SITES[site],
-                browser_proxy=browser_proxy
+                browser_proxy=browser_proxy,
+                flare_cookies=result.get("_flare_cookies")
             )
             result["solve_attempt"] = solve_debug
             result["app_id_used"] = known_id
@@ -515,6 +516,7 @@ def test_px():
             if any(s.get("request_1", {}).get("success") for s in steps if isinstance(s, dict) and "request_1" in s):
                 break
         
+        result.pop("_flare_cookies", None)
         return jsonify(result)
 
     # Se encontrou PX e solver está pronto, tentar resolver
@@ -523,10 +525,13 @@ def test_px():
             app_id=result["app_id"],
             collector_uri=result.get("collector_uri"),
             host=SITES[site],
-            browser_proxy=browser_proxy
+            browser_proxy=browser_proxy,
+            flare_cookies=result.get("_flare_cookies")
         )
         result["solve_attempt"] = solve_debug
 
+    # Limpar campo interno antes de retornar
+    result.pop("_flare_cookies", None)
     return jsonify(result)
 
 
@@ -551,15 +556,57 @@ def _detect_px(site_name, url):
         "Accept-Language": "en-US,en;q=0.9",
     }
 
+    flaresolverr_url = os.environ.get("FLARESOLVERR_URL")
+    flare_cookies = {}  # Cookies obtidos do FlareSolverr
+
     try:
         resp = req.get(url, headers=headers, timeout=15, allow_redirects=True)
         result["http_status"] = resp.status_code
         result["final_url"] = resp.url
         html = resp.text
         resp_headers = dict(resp.headers)
+        
+        # Se Cloudflare bloqueou (403) e temos FlareSolverr, tentar bypass
+        if resp.status_code == 403 and flaresolverr_url:
+            logger.info(f"Cloudflare 403 detected, trying FlareSolverr for {url}")
+            try:
+                flare_resp = req.post(
+                    f"{flaresolverr_url.rstrip('/')}/v1",
+                    json={"cmd": "request.get", "url": url, "maxTimeout": 60000},
+                    timeout=65
+                )
+                flare_data = flare_resp.json()
+                
+                if flare_data.get("status") == "ok":
+                    sol = flare_data["solution"]
+                    html = sol.get("response", html)
+                    result["http_status"] = sol.get("status", resp.status_code)
+                    result["final_url"] = sol.get("url", resp.url)
+                    result["flaresolverr"] = "OK"
+                    resp_headers = {h["name"]: h["value"] for h in sol.get("headers", [])} if isinstance(sol.get("headers"), list) else resp_headers
+                    
+                    # Capturar cookies do FlareSolverr
+                    for cookie in sol.get("cookies", []):
+                        name = cookie.get("name", "")
+                        value = cookie.get("value", "")
+                        if name:
+                            flare_cookies[name] = value
+                    
+                    result["flare_cookies"] = list(flare_cookies.keys())
+                    logger.info(f"FlareSolverr bypassed Cloudflare! Cookies: {list(flare_cookies.keys())}")
+                else:
+                    result["flaresolverr"] = f"FAIL: {flare_data.get('message', 'unknown')}"
+                    logger.warning(f"FlareSolverr failed: {flare_data.get('message')}")
+            except Exception as fe:
+                result["flaresolverr"] = f"ERROR: {str(fe)}"
+                logger.error(f"FlareSolverr error: {fe}")
+    
     except Exception as e:
         result["error"] = f"Fetch failed: {e}"
         return result
+    
+    # Guardar flare_cookies no result para uso posterior
+    result["_flare_cookies"] = flare_cookies
 
     # === METHOD 1: Check response headers for PX cookies ===
     set_cookie = resp_headers.get("Set-Cookie", "") + resp_headers.get("set-cookie", "")
@@ -667,7 +714,7 @@ def _detect_px(site_name, url):
     return result
 
 
-def _try_solve(app_id, collector_uri, host, browser_proxy=None):
+def _try_solve(app_id, collector_uri, host, browser_proxy=None, flare_cookies=None):
     """Tenta resolver PX challenge com sessão real do site"""
     import uuid as uuid_mod
     import traceback
@@ -678,6 +725,8 @@ def _try_solve(app_id, collector_uri, host, browser_proxy=None):
         "host": host,
         "steps": []
     }
+    
+    flaresolverr_url = os.environ.get("FLARESOLVERR_URL")
 
     # STEP 1: Buscar sessão real do site (cookies _pxhd, _pxvid, etc)
     try:
@@ -686,8 +735,43 @@ def _try_solve(app_id, collector_uri, host, browser_proxy=None):
             "Accept": "text/html,application/xhtml+xml",
             "Accept-Language": "en-US,en;q=0.9",
         }
-        site_resp = req.get(host, headers=headers, timeout=15, allow_redirects=True)
+        
+        cookies_to_send = {}
+        if flare_cookies:
+            cookies_to_send.update(flare_cookies)
+        
+        site_resp = req.get(host, headers=headers, cookies=cookies_to_send, timeout=15, allow_redirects=True)
+        
+        # Se 403 e temos FlareSolverr, tentar bypass
+        if site_resp.status_code == 403 and flaresolverr_url and not flare_cookies:
+            logger.info(f"fetch_session got 403, trying FlareSolverr for {host}")
+            try:
+                flare_resp = req.post(
+                    f"{flaresolverr_url.rstrip('/')}/v1",
+                    json={"cmd": "request.get", "url": host, "maxTimeout": 60000},
+                    timeout=65
+                )
+                flare_data = flare_resp.json()
+                if flare_data.get("status") == "ok":
+                    sol = flare_data["solution"]
+                    # Usar cookies do FlareSolverr
+                    for cookie in sol.get("cookies", []):
+                        name = cookie.get("name", "")
+                        value = cookie.get("value", "")
+                        if name:
+                            cookies_to_send[name] = value
+                    # Re-fetch com cookies do FlareSolverr
+                    site_resp = req.get(host, headers=headers, cookies=cookies_to_send, timeout=15, allow_redirects=True)
+                    logger.info(f"FlareSolverr bypass: status={site_resp.status_code}, cookies={list(cookies_to_send.keys())}")
+            except Exception as fe:
+                logger.warning(f"FlareSolverr failed in fetch_session: {fe}")
+        
         cookies = site_resp.cookies.get_dict()
+        # Merge com flare_cookies
+        if flare_cookies:
+            cookies.update(flare_cookies)
+        if cookies_to_send:
+            cookies.update(cookies_to_send)
 
         # Extrair PX cookies
         px_cookies = {k: v for k, v in cookies.items() if k.startswith("_px")}
