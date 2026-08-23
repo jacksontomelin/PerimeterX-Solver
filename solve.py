@@ -261,205 +261,252 @@ def solve_api():
 @app.route('/api/test-px', methods=['GET'])
 def test_px():
     """
-    Teste automático do PX Solver contra sites reais.
-    Extrai app_id do HTML, gera sessão, tenta resolver.
-    Retorna JSON com debug completo.
+    Teste automático do PX Solver.
+    GET /api/test-px?site=crunchbase
+    GET /api/test-px?site=all
     """
     import re
     import traceback
+    import requests as req
+    import uuid as uuid_mod
 
     site = request.args.get('site', 'crunchbase')
 
     SITES = {
-        "crunchbase": {"url": "https://www.crunchbase.com", "name": "Crunchbase"},
-        "zillow": {"url": "https://www.zillow.com", "name": "Zillow"},
-        "fiverr": {"url": "https://www.fiverr.com", "name": "Fiverr"},
-        "stockx": {"url": "https://stockx.com", "name": "StockX"},
-        "airtable": {"url": "https://airtable.com/login", "name": "Airtable"},
+        "crunchbase": "https://www.crunchbase.com",
+        "zillow": "https://www.zillow.com",
+        "fiverr": "https://www.fiverr.com",
+        "stockx": "https://stockx.com",
+        "airtable": "https://airtable.com/login",
+        "indeed": "https://www.indeed.com",
+        "nordstrom": "https://www.nordstrom.com",
     }
+
+    if site == "all":
+        results = {}
+        for s in SITES:
+            try:
+                px = _detect_px(s, SITES[s])
+                results[s] = px
+            except Exception as e:
+                results[s] = {"status": "error", "error": str(e)}
+        return jsonify({"status": "scan_complete", "results": results, "timestamp": datetime.now().isoformat()})
 
     if site not in SITES:
         return jsonify({
             "status": "error",
             "message": f"Site '{site}' não suportado",
-            "sites_disponiveis": list(SITES.keys()),
-            "uso": "GET /api/test-px?site=crunchbase"
+            "available": list(SITES.keys()) + ["all"],
+            "usage": "GET /api/test-px?site=all"
         }), 400
 
-    target = SITES[site]
-    debug = {
-        "site": target["name"],
-        "url": target["url"],
-        "solver_ready": SOLVER_READY,
-        "import_error": IMPORT_ERROR,
-        "steps": []
+    result = _detect_px(site, SITES[site])
+
+    # Se encontrou PX e solver está pronto, tentar resolver
+    if result.get("px_detected") and result.get("app_id") and SOLVER_READY:
+        solve_debug = _try_solve(
+            app_id=result["app_id"],
+            collector_uri=result.get("collector_uri"),
+            host=SITES[site]
+        )
+        result["solve_attempt"] = solve_debug
+
+    return jsonify(result)
+
+
+def _detect_px(site_name, url):
+    """Detecta PerimeterX em um site via múltiplos métodos"""
+    import re
+    import requests as req
+
+    result = {
+        "site": site_name,
+        "url": url,
+        "px_detected": False,
+        "app_id": None,
+        "collector_uri": None,
+        "detection_methods": [],
+        "antibot_signals": [],
     }
 
-    if not SOLVER_READY:
-        debug["steps"].append({"step": "check_solver", "status": "FAIL", "error": IMPORT_ERROR})
-        return jsonify({"status": "error", "debug": debug}), 503
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
 
-    # STEP 1: Fetch site HTML
     try:
-        import requests as req
-        debug["steps"].append({"step": "fetch_site", "status": "START", "url": target["url"]})
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-        resp = req.get(target["url"], headers=headers, timeout=15, allow_redirects=True)
-        
-        debug["steps"].append({
-            "step": "fetch_site",
-            "status": "OK",
-            "http_status": resp.status_code,
-            "content_length": len(resp.text),
-            "final_url": resp.url
-        })
+        resp = req.get(url, headers=headers, timeout=15, allow_redirects=True)
+        result["http_status"] = resp.status_code
+        result["final_url"] = resp.url
         html = resp.text
+        resp_headers = dict(resp.headers)
     except Exception as e:
-        debug["steps"].append({"step": "fetch_site", "status": "FAIL", "error": str(e)})
-        return jsonify({"status": "error", "message": f"Falha ao acessar {target['url']}", "debug": debug}), 500
+        result["error"] = f"Fetch failed: {e}"
+        return result
 
-    # STEP 2: Extract PX app_id from HTML
-    app_id = None
-    collector_uri = None
+    # === METHOD 1: Check response headers for PX cookies ===
+    set_cookie = resp_headers.get("Set-Cookie", "") + resp_headers.get("set-cookie", "")
+    px_cookies = []
+    for cookie_name in ["_pxhd", "_pxvid", "_px3", "_px2", "_pxde", "_pxff"]:
+        if cookie_name in set_cookie:
+            px_cookies.append(cookie_name)
+    if px_cookies:
+        result["px_detected"] = True
+        result["detection_methods"].append(f"PX cookies in headers: {px_cookies}")
 
-    # Procurar por PX app_id no HTML
-    patterns_app_id = [
-        r'PX([0-9A-Za-z]{8,12})',           # PX + alphanumeric
-        r'"appId"\s*:\s*"(PX[^"]+)"',        # JSON config
-        r'px-cloud\.net/([^/]+)/main',       # Script src
-        r'_pxAppId\s*=\s*["\']([^"\']+)',    # JS variable
-    ]
-    
-    found_ids = []
-    for pat in patterns_app_id:
-        matches = re.findall(pat, html)
-        for m in matches:
-            pid = m if m.startswith("PX") else f"PX{m}"
-            if pid not in found_ids and len(pid) >= 10:
-                found_ids.append(pid)
+    # === METHOD 2: Check for PX script tags ===
+    # Pattern: //client.px-cloud.net/PXxxxxx/main.min.js
+    px_scripts = re.findall(r'(?:src|href)\s*=\s*["\']([^"\']*px-cloud[^"\']*)["\']', html, re.I)
+    px_scripts += re.findall(r'(?:src|href)\s*=\s*["\']([^"\']*px-cdn[^"\']*)["\']', html, re.I)
+    if px_scripts:
+        result["px_detected"] = True
+        result["detection_methods"].append(f"PX script tags: {px_scripts}")
+        # Extract app_id from script URL
+        for script in px_scripts:
+            m = re.search(r'/(PX[0-9A-Za-z]+)/', script)
+            if m:
+                result["app_id"] = m.group(1)
 
-    # Procurar collector URL
-    collector_patterns = [
-        r'(https://collector[^"\'\s]+px-cloud\.net[^"\'\s]*)',
-        r'"collector"\s*:\s*"([^"]+)"',
-    ]
-    found_collectors = []
-    for pat in collector_patterns:
-        matches = re.findall(pat, html)
-        found_collectors.extend(matches)
+    # === METHOD 3: Check HTML for PX references ===
+    px_refs = []
+    patterns = {
+        "px-cloud.net": r'px-cloud\.net',
+        "px-cdn.net": r'px-cdn\.net',
+        "_pxAppId": r'_pxAppId',
+        "PXAppId": r'PX[0-9A-Z]{6,12}',
+        "perimeterx": r'[Pp]erimeter[Xx]',
+        "human-challenge": r'human-challenge',
+        "px_cookie": r'_px[23hv]',
+        "pxConfig": r'_?px[Cc]onfig',
+        "px-captcha": r'px-captcha',
+    }
+    for name, pat in patterns.items():
+        if re.search(pat, html):
+            px_refs.append(name)
 
-    if found_ids:
-        app_id = found_ids[0]
-    if found_collectors:
-        collector_uri = found_collectors[0]
-    else:
-        # Construir collector URL a partir do app_id
-        if app_id:
-            collector_uri = f"https://collector-{app_id.lower()}.px-cloud.net/api/v2/collector"
+    if px_refs:
+        if any(r in px_refs for r in ["px-cloud.net", "px-cdn.net", "_pxAppId", "pxConfig", "px-captcha"]):
+            result["px_detected"] = True
+        result["detection_methods"].append(f"HTML references: {px_refs}")
 
-    debug["steps"].append({
-        "step": "extract_px_config",
-        "status": "OK" if app_id else "NOT_FOUND",
-        "app_ids_found": found_ids,
-        "collectors_found": found_collectors,
-        "app_id_selected": app_id,
-        "collector_uri": collector_uri
-    })
+    # === METHOD 4: Extract app_id from HTML/JS ===
+    if not result["app_id"]:
+        # Try various patterns
+        for pat in [
+            r'"appId"\s*:\s*"(PX[^"]+)"',
+            r"'appId'\s*:\s*'(PX[^']+)'",
+            r'_pxAppId\s*=\s*["\']([^"\']+)',
+            r'appId:\s*["\']?(PX[0-9A-Za-z]+)',
+            r'client\.px-cloud\.net/(PX[^/]+)/',
+        ]:
+            m = re.search(pat, html)
+            if m:
+                result["app_id"] = m.group(1)
+                break
 
-    if not app_id:
-        # Site pode não usar PX ou o script é carregado via JS async
-        debug["steps"].append({
-            "step": "note",
-            "message": "Nenhum PX app_id encontrado no HTML. "
-                       "O site pode carregar PX via JavaScript async, "
-                       "ou pode não usar PerimeterX. "
-                       "Tente extrair manualmente via F12 > Network > 'collector'"
-        })
-        
-        # Verificar se há indicadores de outros anti-bots
-        antibot_hints = []
-        if "captcha" in html.lower():
-            antibot_hints.append("CAPTCHA detectado")
-        if "cloudflare" in html.lower():
-            antibot_hints.append("Cloudflare detectado")
-        if "px-cloud" in html.lower():
-            antibot_hints.append("px-cloud referência encontrada")
-        if "perimeterx" in html.lower() or "human.js" in html.lower():
-            antibot_hints.append("PerimeterX/HUMAN referência encontrada")
-        if "_pxhd" in html or "_pxvid" in html:
-            antibot_hints.append("PX cookies/vars detectados")
-        
-        debug["antibot_hints"] = antibot_hints
-        
-        return jsonify({
-            "status": "no_px_found",
-            "message": f"PerimeterX não encontrado no HTML de {target['name']}",
-            "debug": debug
-        })
+    # === METHOD 5: Extract all PX-like IDs ===
+    all_px_ids = list(set(re.findall(r'PX[0-9A-Z]{6,12}', html)))
+    if all_px_ids:
+        result["px_ids_in_html"] = all_px_ids
+        if not result["app_id"]:
+            result["app_id"] = all_px_ids[0]
+        if not result["px_detected"]:
+            result["px_detected"] = True
+            result["detection_methods"].append(f"PX IDs in HTML: {all_px_ids}")
 
-    # STEP 3: Gerar sessão (sid/vid/cts)
+    # === METHOD 6: Try fetching PX script directly ===
+    if not result["px_detected"]:
+        # Some sites load PX via known paths
+        px_paths = [
+            f"{url.rstrip('/')}/px/client/main.min.js",
+        ]
+        for px_url in px_paths:
+            try:
+                r = req.head(px_url, headers=headers, timeout=5, allow_redirects=True)
+                if r.status_code == 200:
+                    result["px_detected"] = True
+                    result["detection_methods"].append(f"PX script accessible at {px_url}")
+            except:
+                pass
+
+    # === Build collector URI ===
+    if result["app_id"] and not result["collector_uri"]:
+        aid = result["app_id"].lower()
+        result["collector_uri"] = f"https://collector-{aid}.px-cloud.net/api/v2/collector"
+
+    # === Other antibot signals ===
+    for sig, pat in {
+        "Cloudflare": r'cloudflare|cf-ray|__cf_',
+        "DataDome": r'datadome',
+        "Akamai": r'akamai|_abck',
+        "reCAPTCHA": r'recaptcha|grecaptcha',
+        "hCaptcha": r'hcaptcha',
+        "Kasada": r'kasada',
+        "Shape/F5": r'shape\.com|_imp_apg_r_',
+    }.items():
+        if re.search(pat, html, re.I) or re.search(pat, str(resp_headers), re.I):
+            result["antibot_signals"].append(sig)
+
+    return result
+
+
+def _try_solve(app_id, collector_uri, host):
+    """Tenta resolver PX challenge"""
     import uuid as uuid_mod
-    fresh_sid = str(uuid_mod.uuid4())
-    fresh_vid = str(uuid_mod.uuid4())
-    fresh_cts = str(uuid_mod.uuid4())
+    import traceback
 
-    debug["steps"].append({
-        "step": "generate_session",
-        "status": "OK",
-        "sid": fresh_sid,
-        "vid": fresh_vid,
-        "cts": fresh_cts
-    })
+    if not collector_uri:
+        collector_uri = f"https://collector-{app_id.lower()}.px-cloud.net/api/v2/collector"
 
-    # STEP 4: Tentar resolver
-    solve_result = {"step": "solve", "status": "START"}
+    sid = str(uuid_mod.uuid4())
+    vid = str(uuid_mod.uuid4())
+    cts = str(uuid_mod.uuid4())
+
+    debug = {
+        "app_id": app_id,
+        "collector_uri": collector_uri,
+        "host": host,
+        "sid": sid,
+        "vid": vid,
+    }
+
     try:
         solver = PXSolver(
             app_id=app_id,
             ft=221,
             collector_uri=collector_uri,
-            host=target["url"],
-            sid=fresh_sid,
-            vid=fresh_vid,
-            cts=fresh_cts
+            host=host,
+            sid=sid,
+            vid=vid,
+            cts=cts
         )
         token = solver.solve()
-        
+
         if token:
-            solve_result["status"] = "SUCCESS"
-            solve_result["token"] = token
-            solve_result["token_preview"] = token[:50] + "..." if len(token) > 50 else token
+            debug["status"] = "SUCCESS"
+            debug["token"] = token[:80] + "..." if len(str(token)) > 80 else token
         else:
-            solve_result["status"] = "FAIL"
-            solve_result["message"] = "Solver retornou None"
-            # Capturar respostas intermediárias
+            debug["status"] = "FAIL"
+            debug["message"] = "Solver returned None (expected with generated session IDs)"
             if solver.resp_1:
-                solve_result["resp_1_keys"] = list(solver.resp_1.keys()) if isinstance(solver.resp_1, dict) else str(type(solver.resp_1))
-            if solver.resp_2:
-                solve_result["resp_2_keys"] = list(solver.resp_2.keys()) if isinstance(solver.resp_2, dict) else str(type(solver.resp_2))
+                debug["resp_1"] = {
+                    "type": str(type(solver.resp_1).__name__),
+                    "keys": list(solver.resp_1.keys()) if isinstance(solver.resp_1, dict) else None,
+                    "preview": str(solver.resp_1)[:300]
+                }
+            else:
+                debug["resp_1"] = None
+                debug["resp_1_note"] = "First request failed - collector may have rejected"
 
     except Exception as e:
-        solve_result["status"] = "ERROR"
-        solve_result["error"] = str(e)
-        solve_result["traceback"] = traceback.format_exc()
+        debug["status"] = "ERROR"
+        debug["error"] = str(e)
+        debug["traceback"] = traceback.format_exc().split("\n")[-3:]
 
-    debug["steps"].append(solve_result)
+    return debug
 
-    # STEP 5: Resultado final
-    status_code = 200 if solve_result["status"] == "SUCCESS" else 500
-    return jsonify({
-        "status": "success" if solve_result["status"] == "SUCCESS" else "error",
-        "site": target["name"],
-        "app_id": app_id,
-        "token": solve_result.get("token"),
-        "debug": debug,
-        "timestamp": datetime.now().isoformat()
-    }), status_code
+
 
 
 @app.errorhandler(404)
