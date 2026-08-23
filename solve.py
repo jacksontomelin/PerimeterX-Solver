@@ -134,7 +134,12 @@ class PXSolver:
     def parse_for_cookie(response):
         try:
             response_str = str(response.get('do', ''))
-            token = response_str.split("bake|_px3|330|")[1].split("|")[0]
+            # Aceitar qualquer TTL: bake|_px3|330|, bake|_px3|600|, etc
+            if 'bake|_px3|' not in response_str:
+                return None
+            token = response_str.split("bake|_px3|")[1].split("|", 1)[1]
+            # Limpar aspas e colchetes do final
+            token = token.rstrip("']").rstrip('"]')
             return token
         except (IndexError, KeyError, AttributeError):
             return None
