@@ -20,6 +20,9 @@ RUN playwright install --with-deps chromium
 # Código
 COPY . .
 
+# Criar diretório para banco de dados
+RUN mkdir -p /app/data
+
 ENV PORT=3000
 EXPOSE 3000
 

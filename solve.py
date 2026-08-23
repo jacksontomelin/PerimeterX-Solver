@@ -374,21 +374,37 @@ class PXSolver:
 
 # ====== FLASK ROUTES ======
 
+# Register dashboard
+try:
+    from dashboard import dashboard_bp, api_key_required, log_request as db_log_request
+    app.register_blueprint(dashboard_bp)
+    DASHBOARD_AVAILABLE = True
+    logger.info("Dashboard loaded successfully")
+except Exception as e:
+    DASHBOARD_AVAILABLE = False
+    logger.warning(f"Dashboard not available: {e}")
+
+
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
         "service": "PerimeterX Solver",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "status": "running",
         "solver_ready": SOLVER_READY,
+        "dashboard": DASHBOARD_AVAILABLE,
         "import_error": IMPORT_ERROR,
         "endpoints": {
             "GET /": "This page",
             "GET /health": "Health check",
             "POST /api/solve": "Solve PX challenge",
-            "GET /api/test-px?site=crunchbase": "Auto-test solver against PX site"
+            "GET /api/test-px?site=crunchbase": "Auto-test solver against PX site",
+            "GET /dashboard?admin_token=xxx": "Admin dashboard",
+            "GET /api/keys": "List API keys (admin)",
+            "POST /api/keys": "Create API key (admin)",
+            "GET /api/stats": "Usage statistics (admin)",
         },
-        "test_sites": ["crunchbase", "zillow", "fiverr", "stockx", "airtable"],
+        "test_sites": ["crunchbase", "zillow", "fiverr", "stockx", "airtable", "nordstrom", "indeed"],
         "timestamp": datetime.now().isoformat()
     })
 
@@ -406,6 +422,8 @@ def health():
 
 @app.route('/api/solve', methods=['POST'])
 def solve_api():
+    start_time = time.time()
+    
     if not SOLVER_READY:
         return jsonify({
             "status": "error",
@@ -422,6 +440,18 @@ def solve_api():
         if missing:
             return jsonify({"status": "error", "message": f"Missing: {', '.join(missing)}"}), 400
 
+        # Check API key if provided
+        api_key_id = None
+        api_key = request.headers.get("X-API-Key") or data.get("api_key")
+        if api_key and DASHBOARD_AVAILABLE:
+            from db import validate_api_key
+            key_info = validate_api_key(api_key)
+            if not key_info:
+                return jsonify({"error": "Invalid API key"}), 403
+            if key_info.get("error"):
+                return jsonify(key_info), 429
+            api_key_id = key_info["id"]
+
         solver = PXSolver(
             app_id=data['app_id'],
             ft=int(data['ft']),
@@ -433,11 +463,28 @@ def solve_api():
             proxy=data.get('proxy')
         )
         token = solver.solve()
+        elapsed = int((time.time() - start_time) * 1000)
+
+        # Log request
+        if DASHBOARD_AVAILABLE:
+            try:
+                db_log_request(
+                    api_key_id=api_key_id,
+                    site=data.get('host', ''),
+                    app_id=data.get('app_id', ''),
+                    status="SUCCESS" if token else "FAIL",
+                    token_obtained=bool(token),
+                    response_time_ms=elapsed,
+                    ip_address=request.remote_addr,
+                    user_agent=request.headers.get("User-Agent", "")[:200]
+                )
+            except Exception:
+                pass
 
         if token:
-            return jsonify({"status": "success", "token": token})
+            return jsonify({"status": "success", "token": token, "time_ms": elapsed})
         else:
-            return jsonify({"status": "error", "message": "Failed to solve"}), 500
+            return jsonify({"status": "error", "message": "Failed to solve", "time_ms": elapsed}), 500
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
