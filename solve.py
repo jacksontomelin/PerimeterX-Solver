@@ -451,6 +451,7 @@ def test_px():
     import uuid as uuid_mod
 
     site = request.args.get('site', 'crunchbase')
+    browser_proxy = request.args.get('proxy', None) or os.environ.get("BROWSER_PROXY") or os.environ.get("RESIDENTIAL_PROXY")
 
     SITES = {
         "crunchbase": "https://www.crunchbase.com",
@@ -500,7 +501,8 @@ def test_px():
             solve_debug = _try_solve(
                 app_id=known_id,
                 collector_uri=collector,
-                host=SITES[site]
+                host=SITES[site],
+                browser_proxy=browser_proxy
             )
             result["solve_attempt"] = solve_debug
             result["app_id_used"] = known_id
@@ -520,7 +522,8 @@ def test_px():
         solve_debug = _try_solve(
             app_id=result["app_id"],
             collector_uri=result.get("collector_uri"),
-            host=SITES[site]
+            host=SITES[site],
+            browser_proxy=browser_proxy
         )
         result["solve_attempt"] = solve_debug
 
@@ -664,7 +667,7 @@ def _detect_px(site_name, url):
     return result
 
 
-def _try_solve(app_id, collector_uri, host):
+def _try_solve(app_id, collector_uri, host, browser_proxy=None):
     """Tenta resolver PX challenge com sessão real do site"""
     import uuid as uuid_mod
     import traceback
@@ -788,7 +791,11 @@ def _try_solve(app_id, collector_uri, host):
                     # Capturar debug info do browser
                     try:
                         from human_challenge import HumanChallengeSolver
-                        hc = HumanChallengeSolver(headless=True, timeout_ms=30000)
+                        # Usar proxy residencial se fornecido
+                        bp = browser_proxy or os.environ.get("BROWSER_PROXY") or os.environ.get("RESIDENTIAL_PROXY")
+                        hc = HumanChallengeSolver(headless=True, timeout_ms=30000, proxy=bp)
+                        if bp:
+                            logger.info(f"Browser solver using proxy: {bp[:30]}...")
                         
                         import asyncio
                         try:

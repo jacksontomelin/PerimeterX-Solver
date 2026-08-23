@@ -92,24 +92,62 @@ class HumanChallengeSolver:
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
     
+    @staticmethod
+    def parse_proxy(proxy_str: str) -> dict:
+        """
+        Parsear string de proxy para formato Playwright.
+        
+        Formatos suportados:
+          host:port
+          user:pass@host:port
+          http://user:pass@host:port
+          socks5://user:pass@host:port
+        """
+        if not proxy_str:
+            return {}
+        
+        proxy_str = proxy_str.strip()
+        
+        # Extrair scheme
+        scheme = "http"
+        if "://" in proxy_str:
+            scheme, proxy_str = proxy_str.split("://", 1)
+        
+        result = {}
+        
+        if "@" in proxy_str:
+            # user:pass@host:port
+            auth, hostport = proxy_str.rsplit("@", 1)
+            if ":" in auth:
+                result["username"], result["password"] = auth.split(":", 1)
+            result["server"] = f"{scheme}://{hostport}"
+        else:
+            # host:port
+            result["server"] = f"{scheme}://{proxy_str}"
+        
+        return result
+    
     async def launch_browser(self) -> None:
-        """Iniciar navegador Chromium"""
-        playwright = await async_playwright().start()
+        """Iniciar navegador Chromium com suporte a proxy residencial"""
+        self._playwright = await async_playwright().start()
         
         launch_args = {
             "headless": self.headless,
             "args": [
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
-                # Chrome 127 - mesmo que PXSolver usa
-                "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+                "--disable-blink-features=AutomationControlled",
             ]
         }
         
+        # Configurar proxy (residencial, datacenter, socks5, etc)
         if self.proxy:
-            launch_args["proxy"] = {"server": self.proxy}
+            proxy_config = self.parse_proxy(self.proxy)
+            if proxy_config:
+                launch_args["proxy"] = proxy_config
+                logger.info(f"Browser using proxy: {proxy_config.get('server', 'unknown')}")
         
-        self.browser = await playwright.chromium.launch(**launch_args)
+        self.browser = await self._playwright.chromium.launch(**launch_args)
         logger.info("Browser launched successfully")
     
     async def create_context(self) -> None:
@@ -137,6 +175,8 @@ class HumanChallengeSolver:
             await self.context.close()
         if self.browser:
             await self.browser.close()
+        if hasattr(self, '_playwright') and self._playwright:
+            await self._playwright.stop()
         logger.info("Browser closed")
     
     async def solve_challenge(
