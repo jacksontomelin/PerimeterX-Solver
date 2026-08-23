@@ -294,64 +294,79 @@ class PXSolver:
         return None
 
 
-def main():
-    """Main execution function"""
-    
-    # Get configuration from environment variables or defaults
-    app_id = os.getenv("PX_APP_ID", "PX0OZADU9K")
-    ft = int(os.getenv("PX_FT", "221"))
-    collector_uri = os.getenv(
-        "PX_COLLECTOR_URI",
-        "https://collector-px0ozadu9k.px-cloud.net/api/v2/collector"
-    )
-    host = os.getenv("PX_HOST", "https://airtable.com/login")
-    sid = os.getenv(
-        "PX_SID",
-        "474b6227-54f2-11ef-a959-cc2d2dcd99ae"
-    )
-    vid = os.getenv(
-        "PX_VID",
-        "49bf0cb5-5697-11ef-84ed-4e092214a776"
-    )
-    cts = os.getenv(
-        "PX_CTS",
-        "49bf1545-5697-11ef-84ed-422d064a3602"
-    )
-    proxy = os.getenv("PX_PROXY", None)
-    
-    logger.info("="*70)
-    logger.info("PerimeterX Solver v6.7.9")
-    logger.info("="*70)
-    logger.info(f"Target: {host}")
-    logger.info(f"App ID: {app_id}")
-    logger.info(f"Collector: {collector_uri}")
-    
-    # Create solver and attempt to solve
-    solver = PXSolver(
-        app_id=app_id,
-        ft=ft,
-        collector_uri=collector_uri,
-        host=host,
-        sid=sid,
-        vid=vid,
-        cts=cts,
-        proxy=proxy
-    )
-    
-    token = solver.solve()
-    
-    logger.info("="*70)
-    if token:
-        logger.info(f"✅ SUCCESS: {token}")
-        return token
-    else:
-        logger.error("❌ FAILED: Could not obtain token")
-        return None
+## ====== FLASK WEB SERVER ======
+
+from flask import Flask, request, jsonify
+from datetime import datetime
+
+app = Flask(__name__)
+
+
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify({
+        "service": "PerimeterX Solver",
+        "version": "2.0.0",
+        "status": "running",
+        "endpoints": {
+            "GET /": "This page",
+            "GET /health": "Health check",
+            "POST /api/solve": "Solve PX challenge"
+        },
+        "timestamp": datetime.now().isoformat()
+    })
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "healthy", "version": "2.0.0", "timestamp": datetime.now().isoformat()})
+
+
+@app.route('/api/solve', methods=['POST'])
+def solve_api():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"status": "error", "message": "JSON body required"}), 400
+
+        required = ['app_id', 'ft', 'collector_uri', 'host', 'sid', 'vid', 'cts']
+        missing = [f for f in required if f not in data]
+        if missing:
+            return jsonify({"status": "error", "message": f"Missing: {', '.join(missing)}"}), 400
+
+        solver = PXSolver(
+            app_id=data['app_id'],
+            ft=int(data['ft']),
+            collector_uri=data['collector_uri'],
+            host=data['host'],
+            sid=data['sid'],
+            vid=data['vid'],
+            cts=data['cts'],
+            proxy=data.get('proxy')
+        )
+
+        token = solver.solve()
+
+        if token:
+            return jsonify({"status": "success", "token": token, "timestamp": datetime.now().isoformat()})
+        else:
+            return jsonify({"status": "error", "message": "Failed to solve challenge"}), 500
+
+    except Exception as e:
+        logger.error(f"API error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({
+        "status": "error",
+        "message": "Endpoint not found",
+        "available": ["GET /", "GET /health", "POST /api/solve"]
+    }), 404
 
 
 if __name__ == "__main__":
-    token = main()
-    if token:
-        print(f"\nToken: {token}")
-    else:
-        print("\nFailed to solve PX challenge")
+    port = int(os.getenv("PORT", 5000))
+    logger.info(f"Starting PerimeterX Solver API on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False)
