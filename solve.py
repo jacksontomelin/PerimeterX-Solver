@@ -155,12 +155,31 @@ class PXSolver:
     def solve_request(self):
         try:
             if self.resp_1 is None:
+                self.last_error = {"phase": "solve_request", "error": "resp_1 is None"}
                 return False
+            
             self.fp_2 = fingerprint_2(
                 json.loads(self.raw_payload), self.resp_1, self.site_uuids
             )
+            
             response_str = str(self.resp_1['do'])
-            cs_value = response_str.split("cs|")[1].split("',")[0]
+            
+            # Extrair cs (challenge seed) - pode não existir
+            cs_value = None
+            if "cs|" in response_str:
+                try:
+                    cs_value = response_str.split("cs|")[1].split("',")[0].split("'")[0]
+                except IndexError:
+                    pass
+            
+            # Extrair sid do response se disponível
+            resp_sid = None
+            if "sid|" in response_str:
+                try:
+                    resp_sid = response_str.split("sid|")[1].split("'")[0].split(",")[0]
+                except IndexError:
+                    pass
+            
             payload_data = {
                 "payload": encrypt_payload(self.fp_2),
                 "appId": self.app_id,
@@ -169,24 +188,48 @@ class PXSolver:
                 "ft": self.ft,
                 "seq": self.rsc - 1,
                 "en": "NTA",
-                "cs": cs_value,
                 "pc": generate_pc(self.pc_key, self.fp_2),
-                "sid": self.site_uuids['sid'],
+                "sid": resp_sid or self.site_uuids['sid'],
                 "vid": self.site_uuids['vid'],
                 "cts": self.site_uuids['cts'],
                 "rsc": self.rsc
             }
+            
+            # Adicionar cs apenas se existir
+            if cs_value:
+                payload_data["cs"] = cs_value
+            
+            self.rsc += 1
+            
             response = self.session.post(
                 self.collector_url,
                 data=urllib.parse.urlencode(payload_data, safe="="),
-                
             )
+            
+            self.last_error = {
+                "phase": "solve_request",
+                "http_status": response.status_code,
+                "response_body": response.text[:500],
+                "cs_found": cs_value is not None,
+                "resp_sid": resp_sid,
+            }
+            
             if response.status_code != 200:
-                logger.error(f"Solve failed: {response.status_code}")
+                logger.error(f"Solve failed: {response.status_code} - {response.text[:200]}")
                 return False
+            
             self.resp_2 = response.json()
+            self.last_error["resp_2_preview"] = str(self.resp_2)[:500]
             return True
+            
         except Exception as e:
+            import traceback
+            self.last_error = {
+                "phase": "solve_request",
+                "exception": str(e),
+                "type": type(e).__name__,
+                "traceback": traceback.format_exc().split("\n")[-4:-1]
+            }
             logger.error(f"Solve error: {e}")
             return False
 
@@ -581,7 +624,10 @@ def _try_solve(app_id, collector_uri, host):
 
                 # Tentar solve_request
                 r2_success = solver.solve_request()
-                attempt["request_2"] = {"success": r2_success}
+                attempt["request_2"] = {
+                    "success": r2_success,
+                    "last_error": solver.last_error
+                }
 
                 if r2_success and solver.resp_2:
                     attempt["request_2"]["resp_2"] = {
