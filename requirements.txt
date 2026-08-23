@@ -1,5 +1,4 @@
-tls-client>=1.10.0
+tls-client==1.0.1
 requests>=2.31.0
 pytz>=2024.1
 python-dotenv>=1.0.0
-
