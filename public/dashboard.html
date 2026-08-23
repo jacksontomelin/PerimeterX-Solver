@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>PX Solver · Admin</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --navy:#0f2d4a;--az:#0284c7;--az2:#0369a1;--azl:#e0f2fe;
+  --green:#059669;--greenl:#d1fae5;--orange:#d97706;--orangel:#fef3c7;
+  --red:#dc2626;--redl:#fee2e2;--purple:#7c3aed;--purplel:#ede9fe;
+  --border:#e2e8f0;--muted:#94a3b8;--bg:#f1f5f9;
+  --sidebar-w:220px;--topbar-h:56px;
+  --text:#1e293b;--card:#fff;--topbar-bg:#fff;--hover:#f8fafc;
+  --shadow:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.04);
+}
+[data-theme="dark"]{
+  --navy:#0c1e30;--az:#38bdf8;--az2:#0ea5e9;--azl:rgba(56,189,248,.12);
+  --green:#10b981;--greenl:rgba(16,185,129,.12);--orange:#fbbf24;--orangel:rgba(251,191,36,.12);
+  --red:#f87171;--redl:rgba(248,113,113,.12);--purple:#a78bfa;--purplel:rgba(167,139,250,.12);
+  --border:#1e3448;--muted:#475569;--bg:#0a1628;
+  --text:#e2e8f0;--card:#0f2236;--topbar-bg:#0f2236;--hover:#1a3350;
+  --shadow:0 1px 3px rgba(0,0,0,.3);
+}
+[data-theme="dark"] .sidebar{background:#091926}
+html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;font-size:13px;color:var(--text);background:var(--bg)}
+a{text-decoration:none;color:inherit}
+.layout{display:flex;height:100vh;overflow:hidden}
+
+/* SIDEBAR */
+.sidebar{width:var(--sidebar-w);flex-shrink:0;background:var(--navy);display:flex;flex-direction:column;height:100vh;overflow-y:auto;scrollbar-width:none}
+.sidebar::-webkit-scrollbar{display:none}
+.sidebar-head{padding:22px 18px 14px;border-bottom:1px solid rgba(255,255,255,.06)}
+.logo{display:flex;align-items:center;gap:10px}
+.logo-icon{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#22d3ee,#0ea5e9);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.logo-text{font-size:16px;font-weight:900;color:#fff;letter-spacing:-.3px;line-height:1}
+.logo-text span{color:#22d3ee}
+.logo-sub{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.18em;color:rgba(255,255,255,.3);margin-top:3px}
+.sidebar-nav{flex:1;padding:8px 10px 16px}
+.nav-section{font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:.2em;color:rgba(255,255,255,.2);padding:16px 8px 5px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;color:rgba(255,255,255,.45);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;transition:all .15s;margin-bottom:1px;cursor:pointer}
+.nav-item:hover{background:rgba(255,255,255,.07);color:rgba(255,255,255,.8)}
+.nav-item.active{background:var(--az);color:#fff;box-shadow:0 2px 8px rgba(2,132,199,.35)}
+.nav-item svg{flex-shrink:0;opacity:.65}.nav-item.active svg,.nav-item:hover svg{opacity:1}
+.nav-badge{margin-left:auto;font-size:9px;font-weight:700;background:rgba(255,255,255,.13);padding:2px 7px;border-radius:99px}
+.nav-item.active .nav-badge{background:rgba(255,255,255,.25)}
+.sidebar-foot{padding:14px 10px;border-top:1px solid rgba(255,255,255,.06)}
+.sidebar-foot-row{display:flex;align-items:center;gap:7px;padding:6px 8px}
+.foot-dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px rgba(16,185,129,.5)}
+.foot-label{font-size:10px;color:rgba(255,255,255,.35);font-weight:500}
+
+/* MAIN */
+.main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.topbar{height:var(--topbar-h);background:var(--topbar-bg);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:12px;flex-shrink:0}
+.topbar-left{display:flex;align-items:center;gap:10px;flex:1}
+.menu-toggle{display:none;background:none;border:none;cursor:pointer;color:var(--muted);padding:4px;border-radius:6px}
+.page-label{font-size:15px;font-weight:800;color:var(--text)}
+.topbar-right{display:flex;align-items:center;gap:8px}
+.topbar-status{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;background:var(--hover);border:1px solid var(--border)}
+.t-dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 2px rgba(16,185,129,.2);animation:pulse 1.8s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 2px rgba(16,185,129,.2)}50%{box-shadow:0 0 0 5px rgba(16,185,129,.1)}}
+.t-txt{font-size:11px;font-weight:600;color:var(--muted)}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;border:none;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .15s}
+.btn-primary{background:var(--az);color:#fff}.btn-primary:hover{background:var(--az2)}
+.btn-ghost{background:var(--hover);color:var(--muted);border:1px solid var(--border)}.btn-ghost:hover{color:var(--text)}
+.btn-danger{background:var(--redl);color:var(--red);border:1px solid transparent}.btn-danger:hover{background:var(--red);color:#fff}
+.content{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px}
+.page{display:none}.page.on{display:flex;flex-direction:column;gap:14px;animation:fadeIn .18s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+/* CARDS & KPI */
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;box-shadow:var(--shadow)}
+.card-hd{display:flex;align-items:center;gap:8px;margin-bottom:14px}
+.card-hd-icon{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.card-hd-title{font-size:13px;font-weight:800}
+.card-hd-sub{font-size:11px;color:var(--muted);margin-left:auto}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid-auto{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:12px}
+.kpi{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;box-shadow:var(--shadow);display:flex;align-items:center;gap:12px}
+.kpi-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.kpi-n{font-size:22px;font-weight:800;line-height:1;letter-spacing:-.02em}
+.kpi-l{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-top:3px}
+
+/* PILLS */
+.pill{display:inline-block;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:700;white-space:nowrap}
+.pill-ok{background:var(--greenl);color:var(--green)}
+.pill-fail{background:var(--redl);color:var(--red)}
+.pill-warn{background:var(--orangel);color:var(--orange)}
+.pill-info{background:var(--azl);color:var(--az)}
+.pill-purple{background:var(--purplel);color:var(--purple)}
+
+/* RANK */
+.rank-list{display:flex;flex-direction:column}
+.rank-item{display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid var(--border)}
+.rank-item:last-child{border:none}
+.rank-pos{width:20px;height:20px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:800;color:#fff;flex-shrink:0}
+.rank-label{flex:2;font-size:12px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rank-bar-wrap{flex:1.2;height:5px;background:var(--border);border-radius:3px;overflow:hidden}
+.rank-bar-fill{height:100%;border-radius:3px;transition:width .5s ease}
+.rank-n{font-size:11.5px;font-weight:700;min-width:28px;text-align:right}
+
+/* TABELA */
+.tabela-wrap{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:var(--shadow)}
+table{width:100%;border-collapse:collapse}
+thead tr{background:var(--navy)}
+th{padding:9px 12px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:rgba(255,255,255,.7);text-align:left}
+td{padding:9px 12px;font-size:12.5px;border-top:1px solid var(--border);vertical-align:middle}
+tbody tr:hover td{background:var(--hover)}
+.key-mono{font-family:ui-monospace,monospace;font-size:11px;color:var(--az)}
+
+/* CHART BARS */
+.chart-wrap{display:flex;align-items:flex-end;gap:5px;height:90px;padding:8px 0}
+.chart-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px}
+.chart-bar{width:100%;border-radius:4px 4px 0 0;min-height:2px;transition:.3s;position:relative}
+.chart-bar:hover{opacity:.8}
+.chart-lbl{font-size:9px;color:var(--muted)}
+.chart-val{font-size:9px;color:var(--text);font-weight:700}
+
+/* MODAL */
+.modal-bg{position:fixed;inset:0;background:rgba(10,22,40,.6);backdrop-filter:blur(4px);z-index:100;display:none;align-items:center;justify-content:center;padding:16px}
+.modal-bg.open{display:flex}
+.modal{background:var(--card);border-radius:16px;width:100%;max-width:460px;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:auto}
+.modal-head{padding:18px 20px;background:var(--navy);border-radius:16px 16px 0 0}
+.modal-head h2{font-size:16px;font-weight:800;color:#fff}
+.modal-head .cat{font-size:10.5px;color:rgba(255,255,255,.6)}
+.modal-body{padding:18px 20px}
+.modal-body label{display:block;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:4px;margin-top:12px}
+.modal-body label:first-child{margin-top:0}
+.modal-body input,.modal-body select,.modal-body textarea{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--hover);color:var(--text);font-size:12px;outline:none}
+.modal-body input:focus{border-color:var(--az);box-shadow:0 0 0 3px rgba(2,132,199,.1)}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+.key-reveal{background:#060f1a;border:1px solid var(--az);border-radius:10px;padding:14px;margin-top:14px;word-break:break-all;font-family:ui-monospace,monospace;font-size:12px;color:var(--green);line-height:1.6}
+
+/* SIDEBAR OVERLAY */
+.sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:90}
+.sidebar-overlay.open{display:block}
+
+/* RESPONSIVE */
+@media(max-width:900px){
+  .sidebar{position:fixed;left:calc(var(--sidebar-w)*-1);top:0;z-index:100;transition:left .22s ease}
+  .sidebar.open{left:0}
+  .menu-toggle{display:flex}
+  .grid-2{grid-template-columns:1fr}
+  .content{padding:14px}
+}
+@media(max-width:640px){
+  .grid-auto{grid-template-columns:repeat(2,1fr);gap:9px}
+  .kpi{padding:12px 13px;gap:9px}
+  .kpi-n{font-size:18px}
+  .topbar{padding:0 14px;height:52px}
+  th,td{padding:7px 8px;font-size:11.5px}
+}
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="sidebar-overlay" id="overlay" onclick="toggleMenu()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <div>
+          <div class="logo-text">PX<span>Solver</span></div>
+          <div class="logo-sub">API Manager</div>
+        </div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section">Painel</div>
+      <div class="nav-item active" onclick="nav('dashboard')">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        Dashboard</div>
+
+      <div class="nav-section">Gerenciar</div>
+      <div class="nav-item" onclick="nav('keys')">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.78 7.78 5.5 5.5 0 017.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+        API Keys <span class="nav-badge" id="badgeKeys">—</span></div>
+
+      <div class="nav-item" onclick="nav('requests')">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Requisições</div>
+
+      <div class="nav-section">Testar</div>
+      <div class="nav-item" onclick="nav('test')">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Test PX Solver</div>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="sidebar-foot-row">
+        <div class="foot-dot"></div>
+        <span class="foot-label" id="footStatus">Online</span>
+      </div>
+      <div class="sidebar-foot-row" style="opacity:.5">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+        <span class="foot-label">UniController</span>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="menu-toggle" onclick="toggleMenu()">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <span class="page-label" id="pageLabel">Dashboard</span>
+      </div>
+      <div class="topbar-right">
+        <div class="topbar-status">
+          <div class="t-dot"></div>
+          <span class="t-txt">v2.1.0</span>
+        </div>
+        <button class="btn btn-ghost" onclick="toggleTema()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.2" y1="4.2" x2="5.6" y2="5.6"/><line x1="18.4" y1="18.4" x2="19.8" y2="19.8"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.2" y1="19.8" x2="5.6" y2="18.4"/><line x1="18.4" y1="5.6" x2="19.8" y2="4.2"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="content">
+      <!-- DASHBOARD -->
+      <div class="page on" id="page-dashboard">
+        <div class="grid-auto" id="kpiGrid"></div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-hd"><div class="card-hd-icon" style="background:var(--azl);color:var(--az)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10M6 20V4M18 20v-6"/></svg></div><span class="card-hd-title">Últimos 7 dias</span></div>
+            <div class="chart-wrap" id="chartWeek"></div>
+          </div>
+          <div class="card">
+            <div class="card-hd"><div class="card-hd-icon" style="background:var(--greenl);color:var(--green)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div><span class="card-hd-title">Top Sites</span></div>
+            <div class="rank-list" id="rankSites"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- API KEYS -->
+      <div class="page" id="page-keys">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:12px;color:var(--muted)">Gerencie as chaves de acesso dos seus clientes</span>
+          <button class="btn btn-primary" onclick="openNewKey()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Nova Key</button>
+        </div>
+        <div class="tabela-wrap">
+          <table><thead><tr>
+            <th>Nome</th><th>Key</th><th>Requests</th><th>Tokens</th><th>Limite/dia</th><th>Status</th><th>Ações</th>
+          </tr></thead><tbody id="keysBody"></tbody></table>
+        </div>
+      </div>
+
+      <!-- REQUESTS -->
+      <div class="page" id="page-requests">
+        <div class="tabela-wrap">
+          <table><thead><tr>
+            <th>Hora</th><th>Site</th><th>Key</th><th>Status</th><th>Token</th><th>Tempo</th>
+          </tr></thead><tbody id="reqsBody"></tbody></table>
+        </div>
+      </div>
+
+      <!-- TEST -->
+      <div class="page" id="page-test">
+        <div class="card">
+          <div class="card-hd"><div class="card-hd-icon" style="background:var(--azl);color:var(--az)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg></div><span class="card-hd-title">Testar PX Solver</span></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap" id="testBtns"></div>
+          <pre id="testResult" style="margin-top:14px;background:var(--hover);border:1px solid var(--border);border-radius:10px;padding:14px;font-size:11px;overflow-x:auto;max-height:500px;white-space:pre-wrap;display:none"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL -->
+<div class="modal-bg" id="modalBg">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-head"><h2 id="mTitle">Nova API Key</h2><div class="cat">Gerar chave de acesso</div></div>
+    <div class="modal-body" id="mBody"></div>
+  </div>
+</div>
+
+<script>
+const ADMIN = new URLSearchParams(location.search).get('admin_token')||'';
+const BASE = location.origin;
+const PAGES = {dashboard:'Dashboard',keys:'API Keys',requests:'Requisições',test:'Test PX Solver'};
+const SITES = ['airtable','fiverr','zillow','nordstrom','crunchbase','stockx','indeed'];
+const C = ['#38bdf8','#22c55e','#f59e0b','#a78bfa','#f472b6','#34d399','#fb923c'];
+
+async function api(path){
+  const r = await fetch(BASE+path+(path.includes('?')?'&':'?')+'admin_token='+ADMIN);
+  return r.json();
+}
+async function apiPost(path, body){
+  const r = await fetch(BASE+path+(path.includes('?')?'&':'?')+'admin_token='+ADMIN, {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+  });
+  return r.json();
+}
+
+/* NAV */
+function nav(p){
+  document.querySelectorAll('.page').forEach(e=>e.classList.remove('on'));
+  document.querySelectorAll('.nav-item').forEach(e=>e.classList.remove('active'));
+  document.getElementById('page-'+p).classList.add('on');
+  event.target.closest('.nav-item').classList.add('active');
+  document.getElementById('pageLabel').textContent = PAGES[p]||p;
+  if(p==='dashboard') loadDash();
+  if(p==='keys') loadKeys();
+  if(p==='requests') loadDash();
+  toggleMenu(true);
+}
+
+function toggleMenu(close){
+  const s=document.getElementById('sidebar'), o=document.getElementById('overlay');
+  if(close){s.classList.remove('open');o.classList.remove('open');return}
+  s.classList.toggle('open'); o.classList.toggle('open');
+}
+function toggleTema(){
+  const t=document.documentElement.dataset.theme==='dark'?'light':'dark';
+  document.documentElement.dataset.theme=t;
+  localStorage.setItem('px_theme',t);
+}
+
+/* DASHBOARD */
+async function loadDash(){
+  const d = await api('/api/stats');
+  const g = document.getElementById('kpiGrid');
+  g.innerHTML = [
+    kpi('Requests Total',d.total_requests,'var(--azl)','var(--az)','<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/>'),
+    kpi('Tokens Gerados',d.total_tokens,'var(--greenl)','var(--green)','<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'),
+    kpi('Taxa Sucesso',d.success_rate+'%','var(--orangel)','var(--orange)','<path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>'),
+    kpi('Keys Ativas',d.active_keys,'var(--purplel)','var(--purple)','<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.78 7.78 5.5 5.5 0 017.78-7.78z"/>'),
+    kpi('Hoje Requests',d.today_requests,'var(--azl)','var(--az)','<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'),
+    kpi('Hoje Tokens',d.today_tokens,'var(--greenl)','var(--green)','<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>'),
+  ].join('');
+
+  // Chart
+  const cw = document.getElementById('chartWeek');
+  if(d.weekly&&d.weekly.length){
+    const mx = Math.max(...d.weekly.map(w=>w.reqs))||1;
+    cw.innerHTML = d.weekly.map((w,i)=>`
+      <div class="chart-col">
+        <div class="chart-val">${w.reqs}</div>
+        <div class="chart-bar" style="height:${Math.max(w.reqs/mx*100,3)}%;background:${C[i%7]}"></div>
+        <div class="chart-lbl">${w.date.slice(5)}</div>
+      </div>`).join('');
+  } else { cw.innerHTML='<div style="color:var(--muted);font-size:12px;padding:20px;text-align:center">Sem dados ainda</div>'; }
+
+  // Top sites
+  const rs = document.getElementById('rankSites');
+  if(d.top_sites&&d.top_sites.length){
+    const mx = Math.max(...d.top_sites.map(s=>s.total))||1;
+    rs.innerHTML = d.top_sites.map((s,i)=>`
+      <div class="rank-item">
+        <div class="rank-pos" style="background:${C[i%7]}">${i+1}</div>
+        <span class="rank-label">${s.site||'N/A'}</span>
+        <div class="rank-bar-wrap"><div class="rank-bar-fill" style="width:${s.total/mx*100}%;background:${C[i%7]}"></div></div>
+        <span class="rank-n">${s.total}</span>
+      </div>`).join('');
+  } else { rs.innerHTML='<div style="color:var(--muted);font-size:12px;padding:10px">Sem dados</div>'; }
+
+  // Recent requests
+  const rb = document.getElementById('reqsBody');
+  if(d.recent_requests&&d.recent_requests.length){
+    rb.innerHTML = d.recent_requests.map(r=>`<tr>
+      <td style="font-size:11px;color:var(--muted)">${(r.timestamp||'').slice(11,19)}</td>
+      <td><strong>${r.site||'—'}</strong></td>
+      <td><span class="key-mono">${r.key_name||'public'}</span></td>
+      <td><span class="pill ${r.status==='SUCCESS'?'pill-ok':'pill-fail'}">${r.status}</span></td>
+      <td>${r.token_obtained?'✅':'—'}</td>
+      <td style="font-size:11px;color:var(--muted)">${r.response_time_ms||'—'}ms</td>
+    </tr>`).join('');
+  } else { rb.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:30px">Sem requisições ainda</td></tr>'; }
+
+  document.getElementById('badgeKeys').textContent = d.active_keys||0;
+}
+
+function kpi(label,value,bg,color,svg){
+  return `<div class="kpi"><div class="kpi-icon" style="background:${bg}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2">${svg}</svg></div><div><div class="kpi-n" style="color:${color}">${value}</div><div class="kpi-l">${label}</div></div></div>`;
+}
+
+/* KEYS */
+async function loadKeys(){
+  const d = await api('/api/keys');
+  const tb = document.getElementById('keysBody');
+  if(!d.keys||!d.keys.length){
+    tb.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px">Nenhuma API key criada</td></tr>';
+    return;
+  }
+  tb.innerHTML = d.keys.map(k=>`<tr>
+    <td><strong>${k.name}</strong>${k.notes?'<br><span style="font-size:10px;color:var(--muted)">'+k.notes+'</span>':''}</td>
+    <td><span class="key-mono">${k.key_prefix}...</span></td>
+    <td>${k.total_requests}</td>
+    <td>${k.total_tokens}</td>
+    <td>${k.daily_limit}</td>
+    <td><span class="pill ${k.is_active?'pill-ok':'pill-fail'}">${k.is_active?'Ativa':'Inativa'}</span></td>
+    <td style="display:flex;gap:4px">
+      <button class="btn ${k.is_active?'btn-danger':'btn-primary'}" style="padding:4px 10px;font-size:10px"
+        onclick="toggleKey('${k.id}',${k.is_active?'false':'true'})">${k.is_active?'Desativar':'Ativar'}</button>
+    </td>
+  </tr>`).join('');
+}
+
+async function toggleKey(id,active){
+  await apiPost('/api/keys/'+id+'/toggle',{active});
+  loadKeys();
+}
+
+function openNewKey(){
+  const mb = document.getElementById('mBody');
+  mb.innerHTML = `
+    <label>Nome do cliente</label>
+    <input id="kName" placeholder="Ex: Loja Auto Center">
+    <label>Limite diário de requests</label>
+    <input id="kLimit" type="number" value="1000">
+    <label>Expirar em (dias, vazio = nunca)</label>
+    <input id="kExpires" type="number" placeholder="30">
+    <label>Notas</label>
+    <textarea id="kNotes" rows="2" placeholder="Observações..." style="resize:vertical"></textarea>
+    <div id="kResult"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="createKey()">Criar Key</button>
+    </div>`;
+  document.getElementById('modalBg').classList.add('open');
+}
+function closeModal(){ document.getElementById('modalBg').classList.remove('open'); }
+
+async function createKey(){
+  const d = await apiPost('/api/keys',{
+    name: document.getElementById('kName').value||'Unnamed',
+    daily_limit: parseInt(document.getElementById('kLimit').value)||1000,
+    expires_days: parseInt(document.getElementById('kExpires').value)||null,
+    notes: document.getElementById('kNotes').value
+  });
+  if(d.key){
+    document.getElementById('kResult').innerHTML =
+      '<div class="key-reveal">⚠️ Copie agora — não será mostrada novamente:<br><br><strong>'+d.key+'</strong></div>';
+    setTimeout(()=>{closeModal();loadKeys()},6000);
+  }
+}
+
+/* TEST */
+function initTest(){
+  const wrap = document.getElementById('testBtns');
+  wrap.innerHTML = SITES.map(s=>
+    `<button class="btn btn-primary" onclick="runTest('${s}')">${s}</button>`
+  ).join('')+`<button class="btn btn-ghost" onclick="runTest('all')">Todos</button>`;
+}
+async function runTest(site){
+  const pre = document.getElementById('testResult');
+  pre.style.display='block';
+  pre.textContent='⏳ Testando '+site+'...';
+  try{
+    const r = await fetch(BASE+'/api/test-px?site='+site);
+    const d = await r.json();
+    pre.textContent = JSON.stringify(d,null,2);
+  }catch(e){ pre.textContent='Erro: '+e.message; }
+}
+
+/* INIT */
+(function(){
+  const t=localStorage.getItem('px_theme');
+  if(t) document.documentElement.dataset.theme=t;
+  loadDash();
+  initTest();
+  document.getElementById('modalBg').addEventListener('click',e=>{if(e.target===e.currentTarget)closeModal()});
+})();
+</script>
+</body>
+</html>
