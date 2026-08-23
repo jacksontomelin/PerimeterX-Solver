@@ -200,8 +200,10 @@ def home():
         "endpoints": {
             "GET /": "This page",
             "GET /health": "Health check",
-            "POST /api/solve": "Solve PX challenge"
+            "POST /api/solve": "Solve PX challenge",
+            "GET /api/test-px?site=crunchbase": "Auto-test solver against PX site"
         },
+        "test_sites": ["crunchbase", "zillow", "fiverr", "stockx", "airtable"],
         "timestamp": datetime.now().isoformat()
     })
 
@@ -256,12 +258,216 @@ def solve_api():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@app.route('/api/test-px', methods=['GET'])
+def test_px():
+    """
+    Teste automático do PX Solver contra sites reais.
+    Extrai app_id do HTML, gera sessão, tenta resolver.
+    Retorna JSON com debug completo.
+    """
+    import re
+    import traceback
+
+    site = request.args.get('site', 'crunchbase')
+
+    SITES = {
+        "crunchbase": {"url": "https://www.crunchbase.com", "name": "Crunchbase"},
+        "zillow": {"url": "https://www.zillow.com", "name": "Zillow"},
+        "fiverr": {"url": "https://www.fiverr.com", "name": "Fiverr"},
+        "stockx": {"url": "https://stockx.com", "name": "StockX"},
+        "airtable": {"url": "https://airtable.com/login", "name": "Airtable"},
+    }
+
+    if site not in SITES:
+        return jsonify({
+            "status": "error",
+            "message": f"Site '{site}' não suportado",
+            "sites_disponiveis": list(SITES.keys()),
+            "uso": "GET /api/test-px?site=crunchbase"
+        }), 400
+
+    target = SITES[site]
+    debug = {
+        "site": target["name"],
+        "url": target["url"],
+        "solver_ready": SOLVER_READY,
+        "import_error": IMPORT_ERROR,
+        "steps": []
+    }
+
+    if not SOLVER_READY:
+        debug["steps"].append({"step": "check_solver", "status": "FAIL", "error": IMPORT_ERROR})
+        return jsonify({"status": "error", "debug": debug}), 503
+
+    # STEP 1: Fetch site HTML
+    try:
+        import requests as req
+        debug["steps"].append({"step": "fetch_site", "status": "START", "url": target["url"]})
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        resp = req.get(target["url"], headers=headers, timeout=15, allow_redirects=True)
+        
+        debug["steps"].append({
+            "step": "fetch_site",
+            "status": "OK",
+            "http_status": resp.status_code,
+            "content_length": len(resp.text),
+            "final_url": resp.url
+        })
+        html = resp.text
+    except Exception as e:
+        debug["steps"].append({"step": "fetch_site", "status": "FAIL", "error": str(e)})
+        return jsonify({"status": "error", "message": f"Falha ao acessar {target['url']}", "debug": debug}), 500
+
+    # STEP 2: Extract PX app_id from HTML
+    app_id = None
+    collector_uri = None
+
+    # Procurar por PX app_id no HTML
+    patterns_app_id = [
+        r'PX([0-9A-Za-z]{8,12})',           # PX + alphanumeric
+        r'"appId"\s*:\s*"(PX[^"]+)"',        # JSON config
+        r'px-cloud\.net/([^/]+)/main',       # Script src
+        r'_pxAppId\s*=\s*["\']([^"\']+)',    # JS variable
+    ]
+    
+    found_ids = []
+    for pat in patterns_app_id:
+        matches = re.findall(pat, html)
+        for m in matches:
+            pid = m if m.startswith("PX") else f"PX{m}"
+            if pid not in found_ids and len(pid) >= 10:
+                found_ids.append(pid)
+
+    # Procurar collector URL
+    collector_patterns = [
+        r'(https://collector[^"\'\s]+px-cloud\.net[^"\'\s]*)',
+        r'"collector"\s*:\s*"([^"]+)"',
+    ]
+    found_collectors = []
+    for pat in collector_patterns:
+        matches = re.findall(pat, html)
+        found_collectors.extend(matches)
+
+    if found_ids:
+        app_id = found_ids[0]
+    if found_collectors:
+        collector_uri = found_collectors[0]
+    else:
+        # Construir collector URL a partir do app_id
+        if app_id:
+            collector_uri = f"https://collector-{app_id.lower()}.px-cloud.net/api/v2/collector"
+
+    debug["steps"].append({
+        "step": "extract_px_config",
+        "status": "OK" if app_id else "NOT_FOUND",
+        "app_ids_found": found_ids,
+        "collectors_found": found_collectors,
+        "app_id_selected": app_id,
+        "collector_uri": collector_uri
+    })
+
+    if not app_id:
+        # Site pode não usar PX ou o script é carregado via JS async
+        debug["steps"].append({
+            "step": "note",
+            "message": "Nenhum PX app_id encontrado no HTML. "
+                       "O site pode carregar PX via JavaScript async, "
+                       "ou pode não usar PerimeterX. "
+                       "Tente extrair manualmente via F12 > Network > 'collector'"
+        })
+        
+        # Verificar se há indicadores de outros anti-bots
+        antibot_hints = []
+        if "captcha" in html.lower():
+            antibot_hints.append("CAPTCHA detectado")
+        if "cloudflare" in html.lower():
+            antibot_hints.append("Cloudflare detectado")
+        if "px-cloud" in html.lower():
+            antibot_hints.append("px-cloud referência encontrada")
+        if "perimeterx" in html.lower() or "human.js" in html.lower():
+            antibot_hints.append("PerimeterX/HUMAN referência encontrada")
+        if "_pxhd" in html or "_pxvid" in html:
+            antibot_hints.append("PX cookies/vars detectados")
+        
+        debug["antibot_hints"] = antibot_hints
+        
+        return jsonify({
+            "status": "no_px_found",
+            "message": f"PerimeterX não encontrado no HTML de {target['name']}",
+            "debug": debug
+        })
+
+    # STEP 3: Gerar sessão (sid/vid/cts)
+    import uuid as uuid_mod
+    fresh_sid = str(uuid_mod.uuid4())
+    fresh_vid = str(uuid_mod.uuid4())
+    fresh_cts = str(uuid_mod.uuid4())
+
+    debug["steps"].append({
+        "step": "generate_session",
+        "status": "OK",
+        "sid": fresh_sid,
+        "vid": fresh_vid,
+        "cts": fresh_cts
+    })
+
+    # STEP 4: Tentar resolver
+    solve_result = {"step": "solve", "status": "START"}
+    try:
+        solver = PXSolver(
+            app_id=app_id,
+            ft=221,
+            collector_uri=collector_uri,
+            host=target["url"],
+            sid=fresh_sid,
+            vid=fresh_vid,
+            cts=fresh_cts
+        )
+        token = solver.solve()
+        
+        if token:
+            solve_result["status"] = "SUCCESS"
+            solve_result["token"] = token
+            solve_result["token_preview"] = token[:50] + "..." if len(token) > 50 else token
+        else:
+            solve_result["status"] = "FAIL"
+            solve_result["message"] = "Solver retornou None"
+            # Capturar respostas intermediárias
+            if solver.resp_1:
+                solve_result["resp_1_keys"] = list(solver.resp_1.keys()) if isinstance(solver.resp_1, dict) else str(type(solver.resp_1))
+            if solver.resp_2:
+                solve_result["resp_2_keys"] = list(solver.resp_2.keys()) if isinstance(solver.resp_2, dict) else str(type(solver.resp_2))
+
+    except Exception as e:
+        solve_result["status"] = "ERROR"
+        solve_result["error"] = str(e)
+        solve_result["traceback"] = traceback.format_exc()
+
+    debug["steps"].append(solve_result)
+
+    # STEP 5: Resultado final
+    status_code = 200 if solve_result["status"] == "SUCCESS" else 500
+    return jsonify({
+        "status": "success" if solve_result["status"] == "SUCCESS" else "error",
+        "site": target["name"],
+        "app_id": app_id,
+        "token": solve_result.get("token"),
+        "debug": debug,
+        "timestamp": datetime.now().isoformat()
+    }), status_code
+
+
 @app.errorhandler(404)
 def not_found(e):
     return jsonify({
         "status": "error",
         "message": "Endpoint not found",
-        "available": ["GET /", "GET /health", "POST /api/solve"]
+        "available": ["GET /", "GET /health", "POST /api/solve", "GET /api/test-px?site=crunchbase"]
     }), 404
 
 
