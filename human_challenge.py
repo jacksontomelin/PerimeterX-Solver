@@ -146,94 +146,181 @@ class HumanChallengeSolver:
     ) -> Tuple[bool, Optional[str]]:
         """
         Navegar até URL e resolver human challenge
-        
-        Args:
-            url: URL que possui o challenge
-            challenge_html: HTML do challenge (opcional, para análise)
-            
-        Returns:
-            (success: bool, _px3_token: Optional[str])
         """
         try:
             if not self.page:
                 await self.create_context()
             
             logger.info(f"Navigating to {url}")
-            await self.page.goto(url, wait_until="networkidle", timeout=self.timeout_ms)
             
-            # Extrair dados do challenge do HTML
+            # Interceptar responses para capturar _px3 token direto
+            px3_token_from_response = []
+            
+            async def handle_response(response):
+                try:
+                    resp_url = response.url
+                    if "px-cloud" in resp_url or "px-cdn" in resp_url or "captcha" in resp_url:
+                        logger.info(f"PX response intercepted: {resp_url} [{response.status}]")
+                    # Capturar _px3 de Set-Cookie headers
+                    headers = response.headers
+                    set_cookie = headers.get("set-cookie", "")
+                    if "_px3=" in set_cookie:
+                        import re
+                        m = re.search(r'_px3=([^;]+)', set_cookie)
+                        if m:
+                            px3_token_from_response.append(m.group(1))
+                            logger.info(f"Captured _px3 from response header!")
+                except:
+                    pass
+            
+            self.page.on("response", handle_response)
+            
+            # Navegar
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+            
+            # Esperar um pouco para scripts PX carregarem
+            await asyncio.sleep(3)
+            
+            # Checar se já temos token via interceptação
+            if px3_token_from_response:
+                return True, px3_token_from_response[0]
+            
+            # Tentar encontrar e resolver o challenge no DOM
             challenge_data = await self._extract_challenge_data()
             
-            if not challenge_data:
-                logger.warning("Could not extract challenge data")
-                return False, None
-            
-            logger.info(f"Challenge detected: {challenge_data.challenge_type.value}")
-            
-            # Resolver baseado no tipo
-            success = await self._solve_by_type(challenge_data)
-            
-            if not success:
-                logger.error("Failed to solve challenge")
-                return False, None
-            
-            # Aguardar resposta do servidor
-            await asyncio.sleep(2)
-            
-            # Extrair _px3 token da response
-            token = await self._extract_px3_token()
-            
-            if token:
-                logger.info(f"Successfully obtained _px3 token")
-                return True, token
+            if challenge_data:
+                logger.info(f"Challenge detected: {challenge_data.challenge_type.value}")
+                success = await self._solve_by_type(challenge_data)
+                
+                if success:
+                    # Esperar response do servidor
+                    await asyncio.sleep(3)
+                    
+                    # Checar token interceptado
+                    if px3_token_from_response:
+                        return True, px3_token_from_response[0]
             else:
-                logger.warning("Could not extract _px3 token after solving challenge")
-                return True, None  # Challenge resolvido mas token não encontrado
+                logger.info("No specific challenge element found, trying press-and-hold on page center")
+                
+                # Fallback: tentar press-and-hold no centro da página (common PX pattern)
+                viewport = self.page.viewport_size
+                cx = viewport["width"] // 2
+                cy = viewport["height"] // 2
+                
+                # Procurar botão/div clicável de challenge
+                hold_btn = await self.page.query_selector(
+                    'button, [role="button"], .challenge, #px-captcha, '
+                    '#px-challenge, [class*="challenge"], [class*="captcha"], '
+                    '[class*="human"], [data-testid*="challenge"]'
+                )
+                
+                if hold_btn:
+                    box = await hold_btn.bounding_box()
+                    if box:
+                        cx = int(box["x"] + box["width"] / 2)
+                        cy = int(box["y"] + box["height"] / 2)
+                        logger.info(f"Found challenge button at ({cx}, {cy})")
+                
+                # Executar press-and-hold
+                logger.info(f"Performing press-and-hold at ({cx}, {cy}) for 3s")
+                await self.page.mouse.move(cx, cy)
+                await self.page.mouse.down()
+                await asyncio.sleep(3.5)
+                await self.page.mouse.up()
+                
+                await asyncio.sleep(3)
+                
+                if px3_token_from_response:
+                    return True, px3_token_from_response[0]
+            
+            # Última tentativa: extrair _px3 dos cookies
+            token = await self._extract_px3_token()
+            if token:
+                return True, token
+            
+            # Dump do HTML para debug (logar o que tem na página)
+            page_title = await self.page.title()
+            page_url = self.page.url
+            body_text = await self.page.evaluate("() => document.body ? document.body.innerText.substring(0, 500) : 'no body'")
+            logger.warning(f"Challenge page debug: title='{page_title}', url='{page_url}', body='{body_text[:200]}'")
+            
+            return False, None
         
         except Exception as e:
             logger.error(f"Error solving challenge: {e}", exc_info=True)
             return False, None
     
     async def _extract_challenge_data(self) -> Optional[ChallengeData]:
-        """Extrair dados do challenge visual do DOM"""
+        """Extrair dados do challenge visual do DOM - seletores reais do PerimeterX"""
         try:
-            # Script para extrair dados do challenge
             challenge_data = await self.page.evaluate("""
             () => {
-                // Procurar elemento do challenge PerimeterX
-                const challengeContainer = document.querySelector('[data-px-challenge]') ||
-                                          document.querySelector('.px-challenge') ||
-                                          document.querySelector('[id*="px"]');
+                // === Seletores REAIS do PerimeterX ===
                 
-                if (!challengeContainer) {
-                    return null;
+                // 1. px-captcha (widget oficial do PX)
+                let el = document.querySelector('#px-captcha');
+                if (el) {
+                    const rect = el.getBoundingClientRect();
+                    return {
+                        type: 'hold_and_release',
+                        duration_ms: 3500,
+                        target_selector: '#px-captcha',
+                        start_x: Math.floor(rect.left + rect.width / 2),
+                        start_y: Math.floor(rect.top + rect.height / 2),
+                        end_x: Math.floor(rect.left + rect.width / 2),
+                        end_y: Math.floor(rect.top + rect.height / 2),
+                        html: el.outerHTML.substring(0, 300),
+                        source: 'px-captcha'
+                    };
                 }
                 
-                // Detectar tipo de challenge pela estrutura DOM
-                let type = 'unknown';
-                if (challengeContainer.querySelector('[data-hold]')) {
-                    type = 'hold_and_release';
-                } else if (challengeContainer.querySelector('[data-swipe]')) {
-                    type = 'swipe';
-                } else if (challengeContainer.querySelector('[data-click]')) {
-                    type = 'click';
-                } else if (challengeContainer.querySelector('[data-rotate]')) {
-                    type = 'rotate';
+                // 2. Iframe do PerimeterX challenge
+                let iframe = document.querySelector('iframe[src*="captcha"]') ||
+                             document.querySelector('iframe[src*="challenge"]') ||
+                             document.querySelector('iframe[src*="perimeterx"]') ||
+                             document.querySelector('iframe[src*="px-cloud"]') ||
+                             document.querySelector('iframe[src*="px-cdn"]');
+                if (iframe) {
+                    const rect = iframe.getBoundingClientRect();
+                    return {
+                        type: 'hold_and_release',
+                        duration_ms: 3500,
+                        target_selector: 'iframe',
+                        start_x: Math.floor(rect.left + rect.width / 2),
+                        start_y: Math.floor(rect.top + rect.height / 2),
+                        end_x: Math.floor(rect.left + rect.width / 2),
+                        end_y: Math.floor(rect.top + rect.height / 2),
+                        html: iframe.outerHTML.substring(0, 300),
+                        source: 'px-iframe'
+                    };
                 }
                 
-                // Extrair dimensões e posições
-                const rect = challengeContainer.getBoundingClientRect();
+                // 3. Divs com "press and hold" text
+                const allElements = document.querySelectorAll('div, span, p, button');
+                for (const elem of allElements) {
+                    const text = (elem.innerText || '').toLowerCase();
+                    if (text.includes('press') || text.includes('hold') || 
+                        text.includes('human') || text.includes('verify') ||
+                        text.includes('challenge') || text.includes('segure') ||
+                        text.includes('pressione')) {
+                        const rect = elem.getBoundingClientRect();
+                        if (rect.width > 50 && rect.height > 20) {
+                            return {
+                                type: 'hold_and_release',
+                                duration_ms: 3500,
+                                target_selector: null,
+                                start_x: Math.floor(rect.left + rect.width / 2),
+                                start_y: Math.floor(rect.top + rect.height / 2),
+                                end_x: Math.floor(rect.left + rect.width / 2),
+                                end_y: Math.floor(rect.top + rect.height / 2),
+                                html: elem.outerHTML.substring(0, 300),
+                                source: 'text-match: ' + text.substring(0, 50)
+                            };
+                        }
+                    }
+                }
                 
-                return {
-                    type,
-                    duration_ms: 3000,
-                    target_selector: '[data-px-challenge]',
-                    start_x: Math.floor(rect.left + rect.width / 2),
-                    start_y: Math.floor(rect.top + rect.height / 2),
-                    end_x: Math.floor(rect.left + rect.width / 2),
-                    end_y: Math.floor(rect.top + rect.height / 2),
-                    html: challengeContainer.innerHTML.substring(0, 500)
-                };
+                return null;
             }
             """)
             
@@ -241,8 +328,13 @@ class HumanChallengeSolver:
                 logger.debug("No challenge data extracted from page")
                 return None
             
+            logger.info(f"Challenge found via: {challenge_data.get('source', 'unknown')}")
+            
             challenge_type_str = challenge_data.get('type', 'unknown')
-            challenge_type = ChallengeType[challenge_type_str.upper()]
+            try:
+                challenge_type = ChallengeType[challenge_type_str.upper()]
+            except KeyError:
+                challenge_type = ChallengeType.UNKNOWN
             
             return ChallengeData(
                 challenge_type=challenge_type,
