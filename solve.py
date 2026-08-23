@@ -31,6 +31,44 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# ====== API KEY AUTHENTICATION ======
+from functools import wraps
+
+# A chave vem da variável de ambiente API_KEY no Coolify.
+# Se não configurada, gera um aviso mas deixa passar (modo aberto).
+API_KEY = os.getenv("API_KEY", None)
+
+
+def require_api_key(f):
+    """Decorator que exige API key nos endpoints protegidos"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # Se nenhuma API_KEY foi configurada, deixa passar (modo aberto)
+        if not API_KEY:
+            return f(*args, **kwargs)
+
+        # Aceita a chave via header 'X-API-Key' ou 'Authorization: Bearer <key>'
+        provided = request.headers.get("X-API-Key")
+        if not provided:
+            auth = request.headers.get("Authorization", "")
+            if auth.startswith("Bearer "):
+                provided = auth[7:]
+        # Também aceita via query param ?api_key= (menos seguro, mas prático)
+        if not provided:
+            provided = request.args.get("api_key")
+
+        if provided != API_KEY:
+            return jsonify({
+                "status": "error",
+                "message": "API key inválida ou ausente",
+                "hint": "Envie via header 'X-API-Key: SUA_CHAVE' ou '?api_key=SUA_CHAVE'"
+            }), 401
+
+        return f(*args, **kwargs)
+    return decorated
+
+
+
 # Track import status
 SOLVER_READY = False
 IMPORT_ERROR = None
@@ -400,6 +438,7 @@ def home():
         "version": "2.1.0",
         "status": "running",
         "solver_ready": SOLVER_READY,
+        "auth_enabled": API_KEY is not None,
         "dashboard": DASHBOARD_AVAILABLE,
         "import_error": IMPORT_ERROR,
         "endpoints": {
@@ -429,6 +468,7 @@ def health():
 
 
 @app.route('/api/solve', methods=['POST'])
+@require_api_key
 def solve_api():
     start_time = time.time()
     
@@ -499,6 +539,7 @@ def solve_api():
 
 
 @app.route('/api/test-px', methods=['GET'])
+@require_api_key
 def test_px():
     """
     Teste automático do PX Solver.
