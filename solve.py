@@ -127,7 +127,7 @@ class PXSolver:
             response = self.session.post(
                 self.collector_url,
                 data=urllib.parse.urlencode(payload, safe="="),
-                timeout=10
+                
             )
             self.last_error = {
                 "phase": "request_1",
@@ -179,7 +179,7 @@ class PXSolver:
             response = self.session.post(
                 self.collector_url,
                 data=urllib.parse.urlencode(payload_data, safe="="),
-                timeout=10
+                
             )
             if response.status_code != 200:
                 logger.error(f"Solve failed: {response.status_code}")
