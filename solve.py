@@ -783,6 +783,24 @@ def _try_solve(app_id, collector_uri, host):
                     debug["solved_with"] = coll_url
                     return debug
 
+                # Checar se é drc|1402 (human challenge)
+                is_human, drc_val = PXSolver.detect_human_challenge(solver.resp_1)
+                if is_human and HUMAN_CHALLENGE_AVAILABLE:
+                    attempt["human_challenge"] = {"detected": True, "drc": drc_val}
+                    logger.info(f"drc|1402 detected on {host}, launching browser solver...")
+                    hc_token = solver.handle_human_challenge(host)
+                    if hc_token:
+                        attempt["status"] = "SUCCESS_HUMAN_CHALLENGE"
+                        attempt["token"] = hc_token
+                        debug["steps"].append(attempt)
+                        debug["status"] = "SUCCESS"
+                        debug["token"] = hc_token
+                        debug["solved_with"] = f"{coll_url} + human_challenge"
+                        return debug
+                    else:
+                        attempt["human_challenge"]["solved"] = False
+                        attempt["human_challenge"]["error"] = "Browser solver returned no token"
+
                 # Tentar solve_request
                 r2_success = solver.solve_request()
                 attempt["request_2"] = {
