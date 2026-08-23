@@ -94,6 +94,7 @@ class PXSolver:
         self.resp_2 = None
         self.raw_payload = None
         self.fp_2 = None
+        self.last_error = None
 
     @staticmethod
     def parse_for_cookie(response):
@@ -128,12 +129,26 @@ class PXSolver:
                 data=urllib.parse.urlencode(payload, safe="="),
                 timeout=10
             )
+            self.last_error = {
+                "phase": "request_1",
+                "http_status": response.status_code,
+                "response_body": response.text[:500],
+                "response_headers": dict(response.headers) if hasattr(response, 'headers') else None
+            }
             if response.status_code != 200:
-                logger.error(f"Request 1 failed: {response.status_code}")
+                logger.error(f"Request 1 failed: {response.status_code} - {response.text[:200]}")
                 return False
             self.resp_1 = response.json()
+            self.last_error = None  # Clear on success
             return True
         except Exception as e:
+            import traceback
+            self.last_error = {
+                "phase": "request_1",
+                "exception": str(e),
+                "type": type(e).__name__,
+                "traceback": traceback.format_exc().split("\n")[-4:-1]
+            }
             logger.error(f"Request 1 error: {e}")
             return False
 
@@ -543,7 +558,8 @@ def _try_solve(app_id, collector_uri, host):
             r1_success = solver.request_1()
             attempt["request_1"] = {
                 "success": r1_success,
-                "resp_1": None
+                "resp_1": None,
+                "last_error": solver.last_error
             }
 
             if r1_success and solver.resp_1:
