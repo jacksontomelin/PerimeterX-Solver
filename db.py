@@ -14,7 +14,14 @@ from typing import Optional, Dict, List, Any
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.environ.get("PX_DB_PATH", "/app/data/px_solver.db")
+# Tentar /app/data primeiro, fallback para diretório local
+_default_db = "/app/data/px_solver.db"
+try:
+    os.makedirs("/app/data", exist_ok=True)
+except Exception:
+    _default_db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "px_solver.db")
+
+DB_PATH = os.environ.get("PX_DB_PATH", _default_db)
 
 
 def get_db():

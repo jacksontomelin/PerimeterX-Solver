@@ -32,7 +32,8 @@ def admin_required(f):
 @dashboard_bp.route('/dashboard')
 @admin_required
 def dashboard_page():
-    return send_from_directory('public', 'dashboard.html')
+    public_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'public')
+    return send_from_directory(public_dir, 'dashboard.html')
 
 
 @dashboard_bp.route('/api/keys', methods=['GET'])

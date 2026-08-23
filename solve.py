@@ -376,13 +376,21 @@ class PXSolver:
 
 # Register dashboard
 try:
-    from dashboard import dashboard_bp, api_key_required, log_request as db_log_request
+    from dashboard import dashboard_bp
     app.register_blueprint(dashboard_bp)
     DASHBOARD_AVAILABLE = True
     logger.info("Dashboard loaded successfully")
+    
+    # Import tracking function separately (optional)
+    try:
+        from db import log_request as db_log_request
+    except Exception:
+        db_log_request = None
 except Exception as e:
+    import traceback
     DASHBOARD_AVAILABLE = False
-    logger.warning(f"Dashboard not available: {e}")
+    db_log_request = None
+    logger.error(f"Dashboard not available: {e}\n{traceback.format_exc()}")
 
 
 @app.route('/', methods=['GET'])
@@ -466,7 +474,7 @@ def solve_api():
         elapsed = int((time.time() - start_time) * 1000)
 
         # Log request
-        if DASHBOARD_AVAILABLE:
+        if DASHBOARD_AVAILABLE and db_log_request:
             try:
                 db_log_request(
                     api_key_id=api_key_id,
