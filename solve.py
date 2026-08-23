@@ -468,6 +468,7 @@ def test_px():
         for s in SITES:
             try:
                 px = _detect_px(s, SITES[s])
+                px.pop("_flare_cookies", None)
                 results[s] = px
             except Exception as e:
                 results[s] = {"status": "error", "error": str(e)}
@@ -570,35 +571,51 @@ def _detect_px(site_name, url):
         if resp.status_code == 403 and flaresolverr_url:
             logger.info(f"Cloudflare 403 detected, trying FlareSolverr for {url}")
             try:
-                flare_resp = req.post(
-                    f"{flaresolverr_url.rstrip('/')}/v1",
-                    json={"cmd": "request.get", "url": url, "maxTimeout": 60000},
-                    timeout=65
-                )
-                flare_data = flare_resp.json()
+                flare_base = flaresolverr_url.rstrip('/')
+                payload = {"cmd": "request.get", "url": url, "maxTimeout": 60000}
                 
-                if flare_data.get("status") == "ok":
-                    sol = flare_data["solution"]
-                    html = sol.get("response", html)
-                    result["http_status"] = sol.get("status", resp.status_code)
-                    result["final_url"] = sol.get("url", resp.url)
-                    result["flaresolverr"] = "OK"
-                    resp_headers = {h["name"]: h["value"] for h in sol.get("headers", [])} if isinstance(sol.get("headers"), list) else resp_headers
-                    
-                    # Capturar cookies do FlareSolverr
-                    for cookie in sol.get("cookies", []):
-                        name = cookie.get("name", "")
-                        value = cookie.get("value", "")
-                        if name:
-                            flare_cookies[name] = value
-                    
-                    result["flare_cookies"] = list(flare_cookies.keys())
-                    logger.info(f"FlareSolverr bypassed Cloudflare! Cookies: {list(flare_cookies.keys())}")
+                # Tentar endpoint /v1 primeiro, depois raiz
+                flare_resp = None
+                for endpoint in [f"{flare_base}/v1", flare_base]:
+                    try:
+                        flare_resp = req.post(endpoint, json=payload, timeout=65)
+                        if flare_resp.status_code == 200:
+                            break
+                    except:
+                        continue
+                
+                if not flare_resp:
+                    result["flaresolverr"] = "ERROR: Could not connect"
                 else:
-                    result["flaresolverr"] = f"FAIL: {flare_data.get('message', 'unknown')}"
-                    logger.warning(f"FlareSolverr failed: {flare_data.get('message')}")
+                    flare_data = flare_resp.json()
+                    result["flaresolverr_debug"] = {
+                        "status_code": flare_resp.status_code,
+                        "response_keys": list(flare_data.keys()),
+                        "status_field": flare_data.get("status"),
+                        "message": str(flare_data.get("message", ""))[:200],
+                    }
+                    
+                    # FlareSolverr padrão
+                    if flare_data.get("status") == "ok" and flare_data.get("solution"):
+                        sol = flare_data["solution"]
+                        html = sol.get("response", html)
+                        result["http_status"] = sol.get("status", resp.status_code)
+                        result["final_url"] = sol.get("url", resp.url)
+                        result["flaresolverr"] = "OK"
+                        resp_headers = {h["name"]: h["value"] for h in sol.get("headers", [])} if isinstance(sol.get("headers"), list) else resp_headers
+                        
+                        for cookie in sol.get("cookies", []):
+                            name = cookie.get("name", "")
+                            value = cookie.get("value", "")
+                            if name:
+                                flare_cookies[name] = value
+                        
+                        result["flare_cookies"] = list(flare_cookies.keys())
+                        logger.info(f"FlareSolverr OK! Cookies: {list(flare_cookies.keys())}")
+                    else:
+                        result["flaresolverr"] = f"FAIL: status={flare_data.get('status')}, msg={str(flare_data.get('message',''))[:100]}"
             except Exception as fe:
-                result["flaresolverr"] = f"ERROR: {str(fe)}"
+                result["flaresolverr"] = f"ERROR: {str(fe)[:150]}"
                 logger.error(f"FlareSolverr error: {fe}")
     
     except Exception as e:
