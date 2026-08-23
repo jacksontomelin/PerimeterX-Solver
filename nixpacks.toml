@@ -1,0 +1,5 @@
+[start]
+cmd = "python solve.py"
+
+[variables]
+PORT = "3000"
