@@ -1,6 +1,7 @@
 """
-PerimeterX Solver v2.0.0 - Web API
-Flask server with lazy-loaded solver to prevent startup crashes
+PerimeterX Solver v2.0.0 - Web API + Human Challenge Support
+Flask server with lazy-loaded solver + Playwright-based human challenge resolver
+Resolves drc|1402 (human challenge) com navegador real
 """
 
 import os
@@ -9,8 +10,9 @@ import logging
 import time
 import uuid
 import urllib.parse
+import asyncio
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 from flask import Flask, request, jsonify
 
 # Load env
@@ -32,6 +34,7 @@ app = Flask(__name__)
 # Track import status
 SOLVER_READY = False
 IMPORT_ERROR = None
+HUMAN_CHALLENGE_AVAILABLE = False
 
 try:
     import tls_client
@@ -42,6 +45,15 @@ try:
 except Exception as e:
     IMPORT_ERROR = str(e)
     logger.error(f"Solver modules failed to load: {e}")
+
+# Tentar carregar human challenge solver
+try:
+    from human_challenge import HumanChallengeSolver, solve_human_challenge_sync
+    HUMAN_CHALLENGE_AVAILABLE = True
+    logger.info("Human challenge solver loaded successfully")
+except Exception as e:
+    logger.warning(f"Human challenge solver not available: {e}")
+    HUMAN_CHALLENGE_AVAILABLE = False
 
 
 class PXSolver:
@@ -103,6 +115,75 @@ class PXSolver:
             token = response_str.split("bake|_px3|330|")[1].split("|")[0]
             return token
         except (IndexError, KeyError, AttributeError):
+            return None
+    
+    @staticmethod
+    def detect_human_challenge(response) -> Tuple[bool, Optional[str]]:
+        """
+        Detectar se o response contém drc|1402 (human challenge)
+        
+        Returns:
+            (is_human_challenge: bool, drc_value: Optional[str])
+        """
+        try:
+            response_str = str(response.get('do', ''))
+            
+            # Verificar padrão drc|<code>
+            if "drc|" in response_str:
+                drc_value = response_str.split("drc|")[1].split("'")[0].split("|")[0]
+                
+                # 1402 = human challenge
+                if drc_value == "1402":
+                    logger.warning("Human challenge detected (drc|1402)")
+                    return True, drc_value
+                else:
+                    logger.info(f"Non-human challenge detected: drc|{drc_value}")
+                    return False, drc_value
+            
+            return False, None
+        except Exception as e:
+            logger.debug(f"Error detecting human challenge: {e}")
+            return False, None
+    
+    def handle_human_challenge(self, host: str, proxy: Optional[str] = None) -> Optional[str]:
+        """
+        Resolver human challenge usando Playwright
+        
+        Args:
+            host: URL host onde o challenge está
+            proxy: Proxy a usar (mesmo do session se disponível)
+            
+        Returns:
+            _px3 token se resolvido, None caso contrário
+        """
+        if not HUMAN_CHALLENGE_AVAILABLE:
+            logger.error("Human challenge solver not available - Playwright not installed")
+            return None
+        
+        try:
+            logger.info(f"Attempting to solve human challenge on {host}")
+            
+            # Usar o mesmo proxy do session se não especificado
+            if not proxy and hasattr(self, 'session') and self.session.proxies:
+                proxy = self.session.proxies.get('https', '').replace('http://', '')
+            
+            # Resolver challenge em navegador real
+            success, token = solve_human_challenge_sync(
+                url=host,
+                proxy=proxy,
+                headless=True,
+                timeout_ms=30000
+            )
+            
+            if success and token:
+                logger.info("Human challenge resolved successfully")
+                return token
+            else:
+                logger.error("Failed to resolve human challenge")
+                return None
+        
+        except Exception as e:
+            logger.error(f"Error handling human challenge: {e}", exc_info=True)
             return None
 
     def request_1(self):
@@ -236,11 +317,36 @@ class PXSolver:
     def solve(self):
         if not self.request_1():
             return None
+        
         token = self.parse_for_cookie(self.resp_1)
         if token:
             return token
+        
+        # Verificar se há human challenge (drc|1402)
+        is_human_challenge, drc_code = self.detect_human_challenge(self.resp_1)
+        if is_human_challenge:
+            logger.warning(f"Human challenge detected in resp_1: {drc_code}")
+            
+            # Tentar resolver com Playwright
+            human_token = self.handle_human_challenge(self.host, proxy=None)
+            if human_token:
+                return human_token
+            
+            logger.error("Failed to resolve human challenge, falling back to solve_request")
+        
         if not self.solve_request():
             return None
+        
+        # Verificar novamente em resp_2
+        is_human_challenge_2, drc_code_2 = self.detect_human_challenge(self.resp_2)
+        if is_human_challenge_2:
+            logger.warning(f"Human challenge detected in resp_2: {drc_code_2}")
+            
+            # Tentar resolver
+            human_token = self.handle_human_challenge(self.host, proxy=None)
+            if human_token:
+                return human_token
+        
         token = self.parse_for_cookie(self.resp_2)
         return token
 
